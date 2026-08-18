@@ -215,7 +215,7 @@ local function Build()
 
    table.insert(widgets, Slider(frame, "Zielradius (yd)",
       "Ab dieser Entfernung gilt das Ziel als erreicht.",
-      16, -252, 3, 50, 1, "ArriveYards", function(v) AT.Send("at ziel " .. v) end))
+      16, -252, 1, 50, 1, "ArriveYards", function(v) AT.Send("at ziel " .. v) end))
 
    table.insert(widgets, Check(frame, "Ankunft laut melden",
       "Meldungen des Servermoduls im Chat anzeigen statt sie auszublenden.",
