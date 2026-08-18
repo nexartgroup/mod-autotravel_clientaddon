@@ -91,12 +91,24 @@ local function Slider(parent, label, tip, x, y, minV, maxV, step, key, onChange)
       if head then head:SetText(label .. ": " .. tostring(v)) end
    end
 
+   -- Entprellung: OnValueChanged feuert bei jeder Mausbewegung. Ohne das
+   -- ginge pro Pixel ein Serverbefehl raus.
+   sl.pending = nil
+   sl:SetScript("OnUpdate", function()
+      if not sl.pending then return end
+      if (GetTime() - sl.pendingAt) < 0.4 then return end
+      local v = sl.pending
+      sl.pending = nil
+      AT.Set(key, v)
+      if onChange then onChange(v) end
+   end)
+
    sl:SetScript("OnValueChanged", function()
       local v = math.floor(sl:GetValue() + 0.5)
       refresh(v)
       if sl.loading then return end
-      AT.Set(key, v)
-      if onChange then onChange(v) end
+      sl.pending = v
+      sl.pendingAt = GetTime()
    end)
 
    sl:SetScript("OnEnter", function()
@@ -215,7 +227,7 @@ local function Build()
 
    table.insert(widgets, Slider(frame, "Zielradius (yd)",
       "Ab dieser Entfernung gilt das Ziel als erreicht.",
-      16, -252, 1, 50, 1, "ArriveYards", function(v) AT.Send("at ziel " .. v) end))
+      16, -252, 1, 50, 1, "ArriveYards", function(v) AT.Send("at set arrival " .. v) end))
 
    table.insert(widgets, Check(frame, "Ankunft laut melden",
       "Meldungen des Servermoduls im Chat anzeigen statt sie auszublenden.",

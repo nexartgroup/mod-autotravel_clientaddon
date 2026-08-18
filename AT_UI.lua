@@ -192,6 +192,8 @@ local function BuildPanel()
          else GameTooltip:AddLine(x.name .. " - " .. x.desc, 0.6, 0.62, 0.66) end
       end
       GameTooltip:AddLine(" ")
+      GameTooltip:AddLine("Selbstmodus laut Server: " ..
+         string.gsub(AT.Bot.StatusText(), "|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""), 1, 1, 1)
       GameTooltip:AddLine("Klicken zum Wechseln", 0.91, 0.77, 0.29)
    end
    f.prof = prof
@@ -351,7 +353,8 @@ function UI.Update()
 
    if panel.prof then
       if AT.GetBool("BotControl") then
-         panel.prof.label:SetText("Profil:  |cffdde2ea" .. AT.Bot.Current().name .. "|r")
+         panel.prof.label:SetText("|cffdde2ea" .. AT.Bot.Current().name ..
+                                  "|r  |cff556070/|r  Bot " .. AT.Bot.StatusText())
       else
          panel.prof.label:SetText("|cff6a7080Playerbot-Steuerung aus|r")
       end

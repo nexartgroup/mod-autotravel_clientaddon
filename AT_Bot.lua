@@ -122,30 +122,118 @@ end
 B.IsOwnCommand = IsOwnCommand
 
 -- ---------------------------------------------------------------------------
+-- Zustandserkennung
+-- ---------------------------------------------------------------------------
+-- Der Server meldet das Umschalten im Chat:
+--     Enable player botAI
+--     Disable player botAI
+-- Das wird mitgelesen, statt den Zustand nur zu vermuten. Damit weiss das
+-- Addon, ob der Selbstmodus wirklich laeuft -- auch wenn du ihn von Hand
+-- ein- oder ausschaltest.
+
+B.active    = false      -- was wir gesendet haben
+B.confirmed = nil        -- was der Server bestaetigt hat (nil = unbekannt)
+
+local ENABLE_PATTERNS  = { "enable player botai", "playerbot ai enabled", "botai aktiviert" }
+local DISABLE_PATTERNS = { "disable player botai", "playerbot ai disabled", "botai deaktiviert" }
+
+local function MatchAny(low, list)
+   for _, pat in ipairs(list) do
+      if string.find(low, pat, 1, true) then return true end
+   end
+   return false
+end
+
+-- Rueckgabe: true, wenn die Zeile eine Zustandsmeldung war
+function B.OnSystemMessage(msg)
+   if type(msg) ~= "string" then return false end
+   local low = string.lower(msg)
+
+   if MatchAny(low, ENABLE_PATTERNS) then
+      B.confirmed = true
+      B.confirmedAt = GetTime()
+      AT.Debug("Selbstmodus vom Server bestaetigt: aktiv")
+      if AT.UI then AT.UI.Update() end
+      return true
+   end
+
+   if MatchAny(low, DISABLE_PATTERNS) then
+      B.confirmed = false
+      B.confirmedAt = GetTime()
+      AT.Debug("Selbstmodus vom Server bestaetigt: aus")
+      if AT.UI then AT.UI.Update() end
+      return true
+   end
+
+   return false
+end
+
+function B.IsRunning()
+   if B.confirmed ~= nil then return B.confirmed end
+   return B.active
+end
+
+function B.StatusText()
+   if not AT.GetBool("BotControl") then return "|cff6a7080aus|r" end
+   if B.confirmed == true  then return "|cff53d17aaktiv|r" end
+   if B.confirmed == false then return "|cff9099a8inaktiv|r" end
+   return "|cffe8c44aunbekannt|r"
+end
+
+-- ---------------------------------------------------------------------------
 -- Selbstmodus an / aus
 -- ---------------------------------------------------------------------------
 
-B.active = false
+local watchdog = CreateFrame("Frame")
+local watchUntil, watchWant = 0, nil
+
+watchdog:SetScript("OnUpdate", function()
+   if watchUntil == 0 then return end
+   if B.confirmed == watchWant then
+      watchUntil = 0
+      return
+   end
+   if GetTime() < watchUntil then return end
+   watchUntil = 0
+   AT.Warn("Keine Bestaetigung fuer den Selbstmodus. Stimmt der Befehl? Aktuell: "
+           .. tostring(AT.Get(watchWant and "SelfOnCommand" or "SelfOffCommand")))
+   AT.Warn("Richtige Schreibweise mit '.playerbots help' pruefen, dann /at selfon <befehl>.")
+end)
+
+local function SendSelf(cmd, want)
+   if not cmd or AT.trim(cmd) == "" then return end
+   AT.Send(string.sub(cmd, 1, 1) == "." and string.sub(cmd, 2) or cmd)
+   watchWant = want
+   watchUntil = GetTime() + 6
+end
 
 function B.Enable()
    if not AT.GetBool("BotControl") then return end
-   local cmd = AT.Get("SelfOnCommand")
-   if cmd and AT.trim(cmd) ~= "" then
-      AT.Send(string.sub(cmd, 1, 1) == "." and string.sub(cmd, 2) or cmd)
+
+   if B.confirmed == true then
+      AT.Debug("Selbstmodus laeuft bereits - nur Profil setzen.")
+      B.active = true
+      B.ApplyProfile()
+      return
    end
+
+   SendSelf(AT.Get("SelfOnCommand"), true)
    B.active = true
    B.ApplyProfile()
 end
 
 function B.Disable()
-   if not B.active then return end
-   B.active = false
    if not AT.GetBool("BotControl") then return end
-   local cmd = AT.Get("SelfOffCommand")
-   if cmd and AT.trim(cmd) ~= "" then
-      AT.Send(string.sub(cmd, 1, 1) == "." and string.sub(cmd, 2) or cmd)
+   if not B.active and B.confirmed ~= true then return end
+
+   B.active = false
+   if B.confirmed == false then
+      AT.Debug("Selbstmodus ist bereits aus.")
+      return
    end
-   AT.Print("Playerbot-Selbstmodus wieder ausgeschaltet.")
+
+   SendSelf(AT.Get("SelfOffCommand"), false)
+   AT.Print("Playerbot-Selbstmodus wird ausgeschaltet.")
 end
 
 function B.ApplyProfile()

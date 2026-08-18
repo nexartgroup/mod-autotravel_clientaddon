@@ -406,10 +406,15 @@ end)
 
 local chat = CreateFrame("Frame")
 chat:RegisterEvent("CHAT_MSG_SYSTEM")
+chat:RegisterEvent("CHAT_MSG_WHISPER")
 chat:SetScript("OnEvent", function(self, event, msg)
-   if type(msg) == "string" and string.sub(msg, 1, 4) == "[AT]" then
+   if type(msg) ~= "string" then return end
+   if string.sub(msg, 1, 4) == "[AT]" then
       HandleProtocol(msg)
+      return
    end
+   -- "Enable player botAI" / "Disable player botAI"
+   if AT.Bot and AT.Bot.OnSystemMessage(msg) then return end
 end)
 
 local function Filter(a1, a2, a3)
@@ -507,8 +512,14 @@ SlashCmdList["AUTOTRAVEL"] = function(input)
       end
 
    elseif cmd == "bot" then
-      AT.Set("BotControl", AT.GetBool("BotControl") and 0 or 1)
-      AT.Print("Playerbot-Steuerung " .. (AT.GetBool("BotControl") and "AN" or "AUS"))
+      if rest == "status" then
+         AT.Print("Selbstmodus: " .. AT.Bot.StatusText() ..
+                  "  |  Profil: " .. AT.Bot.Current().name)
+      else
+         AT.Set("BotControl", AT.GetBool("BotControl") and 0 or 1)
+         AT.Print("Playerbot-Steuerung " .. (AT.GetBool("BotControl") and "AN" or "AUS"))
+         if AT.UI then AT.UI.Update() end
+      end
 
    elseif cmd == "selfon" then
       if rest ~= "" then AT.Set("SelfOnCommand", rest) end
