@@ -101,9 +101,19 @@ P.LoadSlot = LoadSlot
 local function Build()
    if frame then return frame end
 
-   frame = CreateFrame("Frame", "AutoTravelProfilePanel", UIParent)
-   frame.name = "Eigene Profile"
-   frame.parent = "AutoTravel"
+   local outer = CreateFrame("Frame", "AutoTravelProfilePanel", UIParent)
+   outer.name = "Eigene Profile"
+   outer.parent = "AutoTravel"
+
+   local scroll = CreateFrame("ScrollFrame", "AutoTravelProfileScroll", outer,
+                              "UIPanelScrollFrameTemplate")
+   scroll:SetPoint("TOPLEFT", 4, -8)
+   scroll:SetPoint("BOTTOMRIGHT", -28, 8)
+
+   frame = CreateFrame("Frame", "AutoTravelProfileContent", scroll)
+   frame:SetWidth(600)
+   frame:SetHeight(560)
+   scroll:SetScrollChild(frame)
 
    local title = frame:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
    title:SetPoint("TOPLEFT", 16, -16)
@@ -235,12 +245,13 @@ local function Build()
                 "als Standard hinterlaesst. Achtung: 'new rpg' laesst den Bot questen " ..
                 "und dabei Ausruestung wechseln.")
 
-   frame.refresh = function() LoadSlot(current) end
-   frame.okay    = function() end
-   frame.cancel  = function() end
+   outer.refresh = function() LoadSlot(current) end
+   outer.okay    = function() end
+   outer.cancel  = function() end
+   frame.outer   = outer
 
    if InterfaceOptions_AddCategory then
-      InterfaceOptions_AddCategory(frame)
+      InterfaceOptions_AddCategory(outer)
    end
    return frame
 end
@@ -248,9 +259,9 @@ end
 function P.Open()
    Build()
    LoadSlot(current)
-   if InterfaceOptionsFrame_OpenToCategory then
-      InterfaceOptionsFrame_OpenToCategory(frame)
-      InterfaceOptionsFrame_OpenToCategory(frame)
+   if InterfaceOptionsFrame_OpenToCategory and frame.outer then
+      InterfaceOptionsFrame_OpenToCategory(frame.outer)
+      InterfaceOptionsFrame_OpenToCategory(frame.outer)
    end
 end
 

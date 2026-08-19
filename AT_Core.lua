@@ -32,7 +32,7 @@ AutoTravel = AutoTravel or {}
 local AT = AutoTravel
 local CB = AT.Carb
 
-AT.VERSION = "7.3"
+AT.VERSION = "7.4"
 local PREFIX = "|cff33ccffAutoTravel|r: "
 
 AT.active   = false
@@ -60,6 +60,8 @@ local DEFAULTS = {
    GuardHeirlooms = 1,
    GuardAlways    = 1,
    EquipCommand   = "e %s",
+   PlayerOverride = 1,
+   OverrideSeconds = 8,
    AutoDisableBot = 0,
 }
 
@@ -473,6 +475,7 @@ local function Help()
       "/at erbstuecke test   welche Anlegewege kennt der Client?",
       "/at botan | botaus    Selbstmodus von Hand schalten",
       "/at profile           eigene Profile bearbeiten",
+      "/at pause             Spielervorrang von Hand ein/aus",
       "/at selfon <befehl>   Befehl zum Einschalten des Selbstmodus",
       "/at selfoff <befehl>  Befehl zum Ausschalten",
       "/at karte <id>        WorldMapArea-ID erzwingen (0 = automatisch)",
@@ -538,6 +541,8 @@ SlashCmdList["AUTOTRAVEL"] = function(input)
          AT.Set("GuardHeirlooms", AT.GetBool("GuardHeirlooms") and 0 or 1)
          AT.Print("Erbstueckschutz " .. (AT.GetBool("GuardHeirlooms") and "AN" or "AUS"))
       end
+
+   elseif cmd == "pause" then AT.Override.Toggle()
 
    elseif cmd == "botan" then AT.Bot.Enable()
    elseif cmd == "botaus" then AT.Bot.Disable()
@@ -628,3 +633,9 @@ SlashCmdList["AUTOTRAVEL"] = function(input)
 
    else Help() end
 end
+
+-- Beschriftungen fuer die Tastenbelegung (Spiel -> Tastatur -> AutoTravel)
+BINDING_HEADER_AUTOTRAVEL       = "AutoTravel"
+BINDING_NAME_AUTOTRAVEL_PAUSE   = "Spielervorrang ein/aus"
+BINDING_NAME_AUTOTRAVEL_TOGGLE  = "Reise starten / stoppen"
+BINDING_NAME_AUTOTRAVEL_BOT     = "Playerbot ein/aus"

@@ -2,7 +2,7 @@
 ## Title: AutoTravel
 ## Notes: Carbonite liefert das Ziel, mod-autotravel berechnet den Weg. Plus Teleport-Knopf.
 ## Author: -
-## Version: 7.3
+## Version: 7.4
 ## SavedVariables: AutoTravelGlobalDB
 ## SavedVariablesPerCharacter: AutoTravelDB
 ## OptionalDeps: Carbonite
@@ -11,6 +11,7 @@ AT_Carbonite.lua
 AT_MapIds.lua
 AT_Bot.lua
 AT_Gear.lua
+AT_Override.lua
 AT_Core.lua
 AT_UI.lua
 AT_Options.lua

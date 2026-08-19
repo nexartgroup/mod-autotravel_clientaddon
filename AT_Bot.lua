@@ -373,6 +373,32 @@ function B.Toggle()
    if B.IsRunning() then B.Disable() else B.Enable() end
 end
 
+-- ---------------------------------------------------------------------------
+-- Pause fuer den Spielervorrang
+-- ---------------------------------------------------------------------------
+-- Pausieren heisst hier: den Selbstmodus wirklich ausschalten. Nur die
+-- Strategien abzuwaehlen wuerde den Bot weiterlaufen lassen, und er koennte
+-- dem Spieler weiterhin ins Handwerk pfuschen.
+
+B.pausedByPlayer = false
+
+function B.Pause()
+   if not AT.GetBool("BotControl") then return end
+   if not B.IsRunning() then return end
+   B.pausedByPlayer = true
+   SendSelf(AT.Get("SelfOffCommand"), false)
+   B.active = false
+   AT.Debug("Bot pausiert (Spielervorrang).")
+end
+
+function B.Resume()
+   if not B.pausedByPlayer then return end
+   B.pausedByPlayer = false
+   if not AT.GetBool("BotControl") then return end
+   AT.Debug("Bot wird fortgesetzt.")
+   B.Enable(true)
+end
+
 function B.PrintProfiles()
    AT.Print("Verfuegbare Profile:")
    local cur = AT.Get("Profile")
