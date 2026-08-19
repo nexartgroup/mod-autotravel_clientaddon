@@ -90,7 +90,7 @@ local function BuildPanel()
 
    local f = CreateFrame("Frame", "AutoTravelPanel", UIParent)
    f:SetWidth(226)
-   f:SetHeight(196)
+   f:SetHeight(224)
    UI.Skin(f)
    f:SetMovable(true)
    f:EnableMouse(true)
@@ -176,11 +176,11 @@ local function BuildPanel()
    info:SetPoint("TOPRIGHT", -12, -82)
    f.lInfo = info
 
-   -- Profilzeile
-   local prof = UI.Button(f, 202, 20, "", function()
+   -- Profil und Botschalter getrennt
+   local prof = UI.Button(f, 138, 20, "", function()
       local pr = AT.Bot.Next()
       AT.Print("Profil: |cffffffff" .. pr.name .. "|r - " .. pr.desc)
-      if AT.Bot.active then AT.Bot.ApplyProfile() end
+      if AT.Bot.IsRunning() then AT.Bot.ApplyProfile() end
       UI.Update()
    end)
    prof:SetPoint("TOPLEFT", 12, -100)
@@ -192,23 +192,48 @@ local function BuildPanel()
          else GameTooltip:AddLine(x.name .. " - " .. x.desc, 0.6, 0.62, 0.66) end
       end
       GameTooltip:AddLine(" ")
-      GameTooltip:AddLine("Selbstmodus laut Server: " ..
-         string.gsub(AT.Bot.StatusText(), "|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""), 1, 1, 1)
-      GameTooltip:AddLine("Klicken zum Wechseln", 0.91, 0.77, 0.29)
+      GameTooltip:AddLine(" ")
+      GameTooltip:AddLine("Klicken wechselt das Profil", 0.91, 0.77, 0.29)
+      GameTooltip:AddLine("Eigene Profile: /at profile", 0.6, 0.62, 0.66)
    end
    f.prof = prof
 
+   local botBtn = UI.Button(f, 60, 20, "", function() AT.Bot.Toggle() end)
+   botBtn:SetPoint("TOPLEFT", 154, -100)
+   botBtn.tip = function()
+      GameTooltip:AddLine("Playerbot-Selbstmodus")
+      GameTooltip:AddLine("Klicken schaltet ihn ein oder aus.", 0.7, 0.7, 0.7)
+      GameTooltip:AddLine("Er bleibt beim Reiseende an, solange", 0.7, 0.7, 0.7)
+      GameTooltip:AddLine("in den Einstellungen nichts anderes steht.", 0.7, 0.7, 0.7)
+   end
+   f.botBtn = botBtn
+
+   local heir = UI.Button(f, 202, 18, "", function()
+      AT.Set("GuardHeirlooms", AT.GetBool("GuardHeirlooms") and 0 or 1)
+      if AT.GetBool("GuardHeirlooms") then AT.Gear.Snapshot() end
+      AT.Print("Erbstueckschutz " .. (AT.GetBool("GuardHeirlooms") and "AN" or "AUS"))
+      UI.Update()
+   end)
+   heir:SetPoint("TOPLEFT", 12, -122)
+   heir.tip = function()
+      GameTooltip:AddLine("Erbstuecke schuetzen")
+      GameTooltip:AddLine("Angelegte Teile der Qualitaetsstufe 7 werden", 0.7, 0.7, 0.7)
+      GameTooltip:AddLine("nach einem Tausch wieder angelegt.", 0.7, 0.7, 0.7)
+      GameTooltip:AddLine("Rechts steht, ob dauerhaft oder nur auf Reisen.", 0.6, 0.62, 0.66)
+   end
+   f.heir = heir
+
    -- Aktionen
    local go = UI.Button(f, 202, 26, "START", function() AT.Toggle() end)
-   go:SetPoint("TOPLEFT", 12, -126)
+   go:SetPoint("TOPLEFT", 12, -148)
    go.label:SetFontObject("GameFontNormal")
    f.go = go
 
    local re = UI.Button(f, 99, 20, "Neu berechnen", function() AT.Repath() end)
-   re:SetPoint("TOPLEFT", 12, -156)
+   re:SetPoint("TOPLEFT", 12, -178)
 
    local tp = UI.Button(f, 99, 20, "|cffe8c44aTeleport|r", function() AT.Teleport() end)
-   tp:SetPoint("TOPLEFT", 115, -156)
+   tp:SetPoint("TOPLEFT", 115, -178)
    tp.tip = function()
       GameTooltip:AddLine("Direkt zum Ziel springen")
       GameTooltip:AddLine("Nur fuer den Notfall - der normale Weg", 0.7, 0.7, 0.7)
@@ -352,11 +377,23 @@ function UI.Update()
    panel.lInfo:SetText(extra)
 
    if panel.prof then
-      if AT.GetBool("BotControl") then
-         panel.prof.label:SetText("|cffdde2ea" .. AT.Bot.Current().name ..
-                                  "|r  |cff556070/|r  Bot " .. AT.Bot.StatusText())
+      panel.prof.label:SetText("|cffdde2ea" .. AT.Bot.Current().name .. "|r")
+   end
+
+   if panel.botBtn then
+      if not AT.GetBool("BotControl") then
+         panel.botBtn.label:SetText("|cff6a7080gesperrt|r")
       else
-         panel.prof.label:SetText("|cff6a7080Playerbot-Steuerung aus|r")
+         panel.botBtn.label:SetText("Bot " .. AT.Bot.StatusText())
+      end
+   end
+
+   if panel.heir then
+      if AT.GetBool("GuardHeirlooms") then
+         panel.heir.label:SetText("|cff53d17aErbstuecke geschuetzt|r  |cff8a90a0(" ..
+            (AT.GetBool("GuardAlways") and "immer" or "nur auf Reisen") .. ")|r")
+      else
+         panel.heir.label:SetText("|cff6a7080Erbstueckschutz aus|r")
       end
    end
 

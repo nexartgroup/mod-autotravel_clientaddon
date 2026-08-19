@@ -32,7 +32,7 @@ AutoTravel = AutoTravel or {}
 local AT = AutoTravel
 local CB = AT.Carb
 
-AT.VERSION = "5.0"
+AT.VERSION = "7.2"
 local PREFIX = "|cff33ccffAutoTravel|r: "
 
 AT.active   = false
@@ -58,6 +58,9 @@ local DEFAULTS = {
    HideBotCmd     = 1,
    ShowProtocol   = 0,
    GuardHeirlooms = 1,
+   GuardAlways    = 1,
+   EquipCommand   = "e %s",
+   AutoDisableBot = 0,
 }
 
 function AT.Print(m) if DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage(PREFIX .. tostring(m or "")) end end
@@ -290,8 +293,7 @@ function AT.Stop()
    Send("at stop")
    AT.active = false
    AT.status.state = "IDLE"
-   if AT.Bot then AT.Bot.Disable() end
-   if AT.Gear then AT.Gear.Stop() end
+   if AT.Bot and AT.GetBool("AutoDisableBot") then AT.Bot.Disable() end
    if AT.UI then AT.UI.Update() end
 end
 
@@ -364,8 +366,7 @@ local function HandleProtocol(msg)
          -- Reise ist serverseitig zu Ende (Ziel erreicht, Abbruch, Fehler):
          -- Selbstmodus wieder abschalten.
          if wasActive and not AT.active then
-            if AT.Bot then AT.Bot.Disable() end
-            if AT.Gear then AT.Gear.Stop() end
+            if AT.Bot and AT.GetBool("AutoDisableBot") then AT.Bot.Disable() end
          end
          if AT.UI then AT.UI.Update() end
       end
@@ -403,6 +404,8 @@ ev:SetScript("OnEvent", function(self, event, arg1)
    elseif event == "PLAYER_LOGIN" then
       if AT.UI then AT.UI.Build() end
       if AT.Options then AT.Options.Init() end
+      if AT.ProfileEditor then AT.ProfileEditor.Init() end
+      if AT.Gear then AT.Gear.Snapshot(true) end
       AT.Print("v" .. AT.VERSION .. " geladen. /at fuer Hilfe.")
       if not CB.IsAvailable() then
          AT.Warn("Carbonite nicht gefunden - AutoTravel braucht es als Zielquelle.")
@@ -466,6 +469,10 @@ local function Help()
       "/at profil            Profil wechseln (ohne Argument: Liste)",
       "/at bot               Playerbot-Steuerung an/aus",
       "/at erbstuecke        geschuetzte Erbstuecke anzeigen",
+      "/at erbstuecke neu    aktuelle Ausruestung als Sollzustand nehmen",
+      "/at erbstuecke test   welche Anlegewege kennt der Client?",
+      "/at botan | botaus    Selbstmodus von Hand schalten",
+      "/at profile           eigene Profile bearbeiten",
       "/at selfon <befehl>   Befehl zum Einschalten des Selbstmodus",
       "/at selfoff <befehl>  Befehl zum Ausschalten",
       "/at karte <id>        WorldMapArea-ID erzwingen (0 = automatisch)",
@@ -520,12 +527,23 @@ SlashCmdList["AUTOTRAVEL"] = function(input)
 
    elseif cmd == "erbstuecke" or cmd == "heirloom" then
       if rest == "" then
-         AT.Gear.Snapshot(true)
          AT.Gear.Report()
+      elseif rest == "neu" then
+         AT.Gear.Snapshot()
+         AT.Print("Erbstuecke neu erfasst.")
+         AT.Gear.Report()
+      elseif rest == "test" then
+         AT.Gear.Probe()
       else
          AT.Set("GuardHeirlooms", AT.GetBool("GuardHeirlooms") and 0 or 1)
          AT.Print("Erbstueckschutz " .. (AT.GetBool("GuardHeirlooms") and "AN" or "AUS"))
       end
+
+   elseif cmd == "botan" then AT.Bot.Enable()
+   elseif cmd == "botaus" then AT.Bot.Disable()
+
+   elseif cmd == "profile" then
+      AT.ProfileEditor.Open()
 
    elseif cmd == "bot" then
       if rest == "status" then

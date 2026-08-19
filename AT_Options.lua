@@ -193,7 +193,7 @@ local function Build()
    Header(frame, "Verhalten des Playerbots", 16, -74)
 
    local y = -102
-   for i, p in ipairs(AT.Bot.Profiles) do
+   for i, p in ipairs(AT.Bot.List()) do
       local col = (i - 1) % 3
       local row = math.floor((i - 1) / 3)
       local b = AT.UI.Button(frame, 118, 22, p.name, function()
@@ -208,8 +208,12 @@ local function Build()
          GameTooltip:AddLine(p.name)
          GameTooltip:AddLine(p.desc, 0.7, 0.7, 0.7, true)
          GameTooltip:AddLine(" ")
-         GameTooltip:AddLine("co " .. (p.combat or "-"), 0.55, 0.6, 0.68, true)
-         GameTooltip:AddLine("nc " .. (p.noncombat or "-"), 0.55, 0.6, 0.68, true)
+         if p.customIndex then
+            GameTooltip:AddLine("Eigenes Profil - Unterseite 'Eigene Profile'", 0.55, 0.6, 0.68, true)
+         else
+            GameTooltip:AddLine("co " .. (p.combat or "-"), 0.55, 0.6, 0.68, true)
+            GameTooltip:AddLine("nc " .. (p.noncombat or "-"), 0.55, 0.6, 0.68, true)
+         end
       end
       table.insert(profButtons, b)
    end
@@ -222,37 +226,53 @@ local function Build()
       "Schaltet den Selbstmodus beim Start ein und am Ende der Reise wieder aus.",
       16, -184, "BotControl", function() if AT.UI then AT.UI.Update() end end))
 
+   table.insert(widgets, Check(frame, "Selbstmodus am Reiseende ausschalten",
+      "Aus: der Bot bleibt aktiv, wenn das Ziel erreicht ist. Ein: er wird " ..
+      "zusammen mit der Reise beendet.",
+      16, -210, "AutoDisableBot"))
+
+   local edit = AT.UI.Button(frame, 160, 22, "Eigene Profile bearbeiten", function()
+      AT.ProfileEditor.Open()
+   end)
+   edit:SetPoint("TOPLEFT", 250, -208)
+
    table.insert(widgets, Check(frame, "Erbstuecke schuetzen",
       "Angelegte Gegenstaende der Qualitaetsstufe 7 werden ueberwacht. Tauscht der " ..
       "Bot eines aus, wird es automatisch wieder angelegt, solange es in den Taschen " ..
       "liegt. Normale Ausruestung darf der Bot weiterhin frei wechseln.",
-      250, -184, "GuardHeirlooms", function(v)
-         if v == 1 then AT.Gear.Snapshot() else AT.Gear.Stop() end
+      16, -238, "GuardHeirlooms", function(v)
+         if v == 1 then AT.Gear.Snapshot() end
+         if AT.UI then AT.UI.Update() end
       end))
 
+   table.insert(widgets, Check(frame, "auch wenn der Bot aus ist",
+      "Der Schutz laeuft dauerhaft, nicht nur waehrend einer Reise. Empfohlen, " ..
+      "weil der Bot auch ausserhalb einer Reise tauschen kann.",
+      250, -238, "GuardAlways", function() if AT.UI then AT.UI.Update() end end))
+
    -- ---- Reise -----------------------------------------------------------
-   Header(frame, "Reise", 16, -220)
+   Header(frame, "Reise", 16, -276)
 
    table.insert(widgets, Slider(frame, "Zielradius (yd)",
       "Ab dieser Entfernung gilt das Ziel als erreicht.",
-      16, -252, 1, 50, 1, "ArriveYards", function(v) AT.Send("at set arrival " .. v) end))
+      16, -308, 1, 50, 1, "ArriveYards", function(v) AT.Send("at set arrival " .. v) end))
 
    table.insert(widgets, Check(frame, "Ankunft laut melden",
       "Meldungen des Servermoduls im Chat anzeigen statt sie auszublenden.",
-      250, -248, "ShowProtocol", function(v) AT.Set("HideProtocol", (v == 1) and 0 or 1) end))
+      250, -304, "ShowProtocol", function(v) AT.Set("HideProtocol", (v == 1) and 0 or 1) end))
 
    -- ---- Teleport --------------------------------------------------------
-   Header(frame, "Teleport", 16, -296)
+   Header(frame, "Teleport", 16, -352)
 
    table.insert(widgets, Check(frame, "Vor dem Teleport nachfragen",
       "Sicherheitsabfrage, damit der Knopf nicht versehentlich ausloest.",
-      16, -324, "ConfirmTp"))
+      16, -380, "ConfirmTp"))
 
    local tpMode = AT.UI.Button(frame, 180, 22, "", function()
       AT.Set("TeleportMode", (AT.Get("TeleportMode") == "go") and "module" or "go")
       O.Load()
    end)
-   tpMode:SetPoint("TOPLEFT", 250, -322)
+   tpMode:SetPoint("TOPLEFT", 250, -378)
    tpMode.tip = function()
       GameTooltip:AddLine("Wie teleportiert wird")
       GameTooltip:AddLine("Modul: das Servermodul springt selbst (kein GM noetig).", 0.7, 0.7, 0.7, true)
@@ -265,25 +285,25 @@ local function Build()
    table.insert(widgets, tpMode)
 
    -- ---- Anzeige ---------------------------------------------------------
-   Header(frame, "Anzeige", 16, -364)
+   Header(frame, "Anzeige", 16, -420)
 
-   table.insert(widgets, Check(frame, "Panel anzeigen", nil, 16, -392, "PanelVisible",
+   table.insert(widgets, Check(frame, "Panel anzeigen", nil, 16, -448, "PanelVisible",
       function() if AT.UI then AT.UI.Refresh() end end))
-   table.insert(widgets, Check(frame, "Minimap-Knopf", nil, 250, -392, "MinimapButton",
+   table.insert(widgets, Check(frame, "Minimap-Knopf", nil, 250, -448, "MinimapButton",
       function() if AT.UI then AT.UI.RefreshMinimap() end end))
-   table.insert(widgets, Check(frame, "Botbefehle im Chat verbergen", nil, 16, -418, "HideBotCmd"))
+   table.insert(widgets, Check(frame, "Botbefehle im Chat verbergen", nil, 16, -474, "HideBotCmd"))
    table.insert(widgets, Check(frame, "Debug-Ausgaben", "Zeigt jeden gesendeten Befehl und die " ..
-      "Diagnosemeldungen des Servermoduls.", 250, -418, "Debug",
+      "Diagnosemeldungen des Servermoduls.", 250, -474, "Debug",
       function(v) AT.Send("at debug " .. v) end))
 
    -- ---- Playerbot-Befehle ----------------------------------------------
-   Header(frame, "Playerbot-Befehle", 16, -454)
+   Header(frame, "Playerbot-Befehle", 16, -510)
 
-   table.insert(widgets, Edit(frame, "Selbstmodus einschalten", 16, -482, 250, "SelfOnCommand"))
-   table.insert(widgets, Edit(frame, "Selbstmodus ausschalten", 290, -482, 250, "SelfOffCommand"))
+   table.insert(widgets, Edit(frame, "Selbstmodus einschalten", 16, -538, 250, "SelfOnCommand"))
+   table.insert(widgets, Edit(frame, "Selbstmodus ausschalten", 290, -538, 250, "SelfOffCommand"))
 
    Note(frame, "Genaue Schreibweise mit '.playerbots help' pruefen. Enter speichert.",
-        20, -524)
+        20, -580)
 
    frame.refresh = function() O.Load() end
    frame.okay    = function() end
