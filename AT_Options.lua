@@ -214,13 +214,21 @@ local function Build()
       table.insert(profButtons, b)
    end
 
-   Note(frame, "AutoTravel aendert am Charakter nichts ausser Strategien: keine Ausruestung, " ..
-               "keine Talente, kein Handel. 'new rpg' wird in jedem Profil abgeschaltet.",
+   Note(frame, "AutoTravel sendet selbst keinen Ausruestungs-, Talent- oder Handelsbefehl. " ..
+               "'new rpg' wird in jedem Profil abgeschaltet.",
         20, -158)
 
    table.insert(widgets, Check(frame, "Playerbot-Selbstmodus mitsteuern",
       "Schaltet den Selbstmodus beim Start ein und am Ende der Reise wieder aus.",
       16, -184, "BotControl", function() if AT.UI then AT.UI.Update() end end))
+
+   table.insert(widgets, Check(frame, "Erbstuecke schuetzen",
+      "Angelegte Gegenstaende der Qualitaetsstufe 7 werden ueberwacht. Tauscht der " ..
+      "Bot eines aus, wird es automatisch wieder angelegt, solange es in den Taschen " ..
+      "liegt. Normale Ausruestung darf der Bot weiterhin frei wechseln.",
+      250, -184, "GuardHeirlooms", function(v)
+         if v == 1 then AT.Gear.Snapshot() else AT.Gear.Stop() end
+      end))
 
    -- ---- Reise -----------------------------------------------------------
    Header(frame, "Reise", 16, -220)

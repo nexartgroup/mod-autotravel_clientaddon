@@ -57,6 +57,7 @@ local DEFAULTS = {
    SelfOffCommand = ".playerbots bot self off",
    HideBotCmd     = 1,
    ShowProtocol   = 0,
+   GuardHeirlooms = 1,
 }
 
 function AT.Print(m) if DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage(PREFIX .. tostring(m or "")) end end
@@ -280,6 +281,7 @@ function AT.Start()
    AT.status.state  = "STARTING"
    AT.status.target = name
    if AT.Bot then AT.Bot.Enable() end
+   if AT.Gear then AT.Gear.Start() end
    if AT.UI then AT.UI.Update() end
    Watchdog()
 end
@@ -289,6 +291,7 @@ function AT.Stop()
    AT.active = false
    AT.status.state = "IDLE"
    if AT.Bot then AT.Bot.Disable() end
+   if AT.Gear then AT.Gear.Stop() end
    if AT.UI then AT.UI.Update() end
 end
 
@@ -360,7 +363,10 @@ local function HandleProtocol(msg)
          AT.active = (st ~= "IDLE" and st ~= "ARRIVED" and st ~= "FAILED")
          -- Reise ist serverseitig zu Ende (Ziel erreicht, Abbruch, Fehler):
          -- Selbstmodus wieder abschalten.
-         if wasActive and not AT.active and AT.Bot then AT.Bot.Disable() end
+         if wasActive and not AT.active then
+            if AT.Bot then AT.Bot.Disable() end
+            if AT.Gear then AT.Gear.Stop() end
+         end
          if AT.UI then AT.UI.Update() end
       end
 
@@ -459,6 +465,7 @@ local function Help()
       "/at route             Stuetzpunkte der Carbonite-Route anzeigen",
       "/at profil            Profil wechseln (ohne Argument: Liste)",
       "/at bot               Playerbot-Steuerung an/aus",
+      "/at erbstuecke        geschuetzte Erbstuecke anzeigen",
       "/at selfon <befehl>   Befehl zum Einschalten des Selbstmodus",
       "/at selfoff <befehl>  Befehl zum Ausschalten",
       "/at karte <id>        WorldMapArea-ID erzwingen (0 = automatisch)",
@@ -509,6 +516,15 @@ SlashCmdList["AUTOTRAVEL"] = function(input)
             if AT.Bot.active then AT.Bot.ApplyProfile() end
             if AT.UI then AT.UI.Update() end
          end
+      end
+
+   elseif cmd == "erbstuecke" or cmd == "heirloom" then
+      if rest == "" then
+         AT.Gear.Snapshot(true)
+         AT.Gear.Report()
+      else
+         AT.Set("GuardHeirlooms", AT.GetBool("GuardHeirlooms") and 0 or 1)
+         AT.Print("Erbstueckschutz " .. (AT.GetBool("GuardHeirlooms") and "AN" or "AUS"))
       end
 
    elseif cmd == "bot" then
