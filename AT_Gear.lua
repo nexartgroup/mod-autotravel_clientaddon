@@ -79,11 +79,17 @@ function G.Adopt()
          local id = ItemId(link)
          if id then
             local w = G.guarded[slot]
-            if not w or w.id ~= id then
+            if not w then
                G.guarded[slot] = { id = id, link = link, tries = 0, lastTry = 0 }
+            elseif w.id ~= id then
+               -- Erbstueck gegen anderes Erbstueck: gewollter Wechsel
+               G.guarded[slot] = { id = id, link = link, tries = 0, lastTry = 0,
+                                   cycles = w.cycles }
             else
+               -- Unveraendert. Den Versuchszaehler NICHT anfassen -- sonst
+               -- kann CheckSlot einen Erfolg nicht mehr von "war nie weg"
+               -- unterscheiden und meldet nie, dass es geklappt hat.
                w.link = link
-               w.tries = 0
             end
             n = n + 1
          end
@@ -201,14 +207,20 @@ local function CheckSlot(slot, now)
       if (w.tries or 0) > 0 then
          G.restored = G.restored + 1
          AT.Print("|cff53d17aErbstueck wieder angelegt|r: " .. (w.link or link) ..
-                  (G.lastMethod and (" |cff8a90a0(" .. G.lastMethod .. ")|r") or ""))
+                  (G.lastMethod and (" |cff8a90a0(" .. G.lastMethod .. ", Versuch " ..
+                   w.tries .. ")|r") or ""))
          -- Wird uns dasselbe Teil gleich wieder abgenommen, ist das kein
          -- Bot-Unfall, sondern Absicht. Dann nicht endlos dagegenhalten.
          w.cycles = (w.cycles or 0) + 1
-         if w.cycles >= 2 then
-            AT.Warn("Platz " .. slot .. " wurde nach dem Zuruecklegen erneut geaendert. " ..
-                    "Ich gehe von Absicht aus und lasse diesen Platz in Ruhe. " ..
-                    "'/at erbstuecke neu' nimmt ihn wieder auf.")
+         w.tries = 0
+         if w.cycles >= 3 then
+            AT.Warn("Platz " .. slot .. " wurde " .. w.cycles ..
+                    "-mal nach dem Zuruecklegen wieder geaendert.")
+            AT.Warn("Das ist kein Ausrutscher: entweder legst du selbst um, oder der " ..
+                    "Bot tauscht systematisch. Ich lasse den Platz jetzt in Ruhe.")
+            AT.Warn("Dauerhaft abstellen laesst sich das nur serverseitig - in " ..
+                    "playerbots.conf gibt es Optionen zum automatischen Ausruesten.")
+            AT.Warn("'/at erbstuecke neu' nimmt den Platz wieder auf.")
             G.guarded[slot] = nil
             return
          end
@@ -222,6 +234,13 @@ local function CheckSlot(slot, now)
       -- Erbstueck gegen Erbstueck getauscht: gewollt, neuen Stand uebernehmen.
       G.guarded[slot] = { id = ItemId(link), link = link, tries = 0, lastTry = 0 }
       return
+   end
+
+   if w.tries == 0 then
+      -- Erster Befund: festhalten, wodurch ersetzt wurde. Das sagt mehr ueber
+      -- die Ursache als jede Vermutung.
+      w.replacedBy = link or "nichts"
+      AT.Debug("Platz " .. slot .. " ersetzt durch " .. tostring(w.replacedBy))
    end
 
    local gap = (w.tries or 0) >= MAX_TRIES and BACKOFF_GAP or RETRY_GAP
@@ -260,7 +279,8 @@ local function CheckSlot(slot, now)
             w.tries, tostring(how), bag, bslot, slot))
 
    if w.tries == 1 then
-      AT.Print("Erbstueck wurde ersetzt - lege " .. (blink or w.link) .. " wieder an (" .. how .. ").")
+      AT.Print("Erbstueck wurde ersetzt durch " .. tostring(w.replacedBy or "?") ..
+               " - lege " .. (blink or w.link) .. " wieder an.")
    elseif w.tries == MAX_TRIES then
       AT.Warn("Erbstueck " .. (blink or w.link) .. " laesst sich nicht anlegen. " ..
               "Weitere Versuche nur noch alle " .. math.floor(BACKOFF_GAP) .. " Sekunden.")
@@ -359,10 +379,11 @@ function G.Report()
       n = n + 1
       local now = GetInventoryItemLink("player", slot)
       local ok = (now and ItemId(now) == w.id)
-      DEFAULT_CHAT_FRAME:AddMessage(string.format("   Platz %2d  %s  %s%s",
+      DEFAULT_CHAT_FRAME:AddMessage(string.format("   Platz %2d  %s  %s%s%s",
          slot, w.link or "?",
          ok and "|cff53d17aangelegt|r" or "|cffe8654aFEHLT|r",
-         (w.tries or 0) > 0 and ("  |cff8a90a0" .. w.tries .. " Versuch(e)|r") or ""))
+         (w.tries or 0) > 0 and ("  |cff8a90a0" .. w.tries .. " Versuch(e)|r") or "",
+         (w.cycles or 0) > 0 and ("  |cffe8c44a" .. w.cycles .. "x zurueckgeholt|r") or ""))
    end
    local can, why = CanEquipNow()
    if not can then
