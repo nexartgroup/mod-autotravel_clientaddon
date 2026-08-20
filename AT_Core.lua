@@ -32,7 +32,7 @@ AutoTravel = AutoTravel or {}
 local AT = AutoTravel
 local CB = AT.Carb
 
-AT.VERSION = "7.4"
+AT.VERSION = "7.6"
 local PREFIX = "|cff33ccffAutoTravel|r: "
 
 AT.active   = false
@@ -62,6 +62,8 @@ local DEFAULTS = {
    EquipCommand   = "e %s",
    PlayerOverride = 1,
    OverrideSeconds = 8,
+   OverridePausesBot = 0,
+   TakeControl    = 1,
    AutoDisableBot = 0,
 }
 
@@ -282,6 +284,8 @@ function AT.Start()
       Send("at start " .. args)
    end
 
+   Send("at set control " .. (AT.GetBool("TakeControl") and "1" or "0"))
+
    AT.active = true
    AT.status.state  = "STARTING"
    AT.status.target = name
@@ -476,6 +480,7 @@ local function Help()
       "/at botan | botaus    Selbstmodus von Hand schalten",
       "/at profile           eigene Profile bearbeiten",
       "/at pause             Spielervorrang von Hand ein/aus",
+      "/at kontrolle         Steuerungsuebernahme waehrend der Fahrt",
       "/at selfon <befehl>   Befehl zum Einschalten des Selbstmodus",
       "/at selfoff <befehl>  Befehl zum Ausschalten",
       "/at karte <id>        WorldMapArea-ID erzwingen (0 = automatisch)",
@@ -543,6 +548,14 @@ SlashCmdList["AUTOTRAVEL"] = function(input)
       end
 
    elseif cmd == "pause" then AT.Override.Toggle()
+
+   elseif cmd == "kontrolle" then
+      AT.Set("TakeControl", AT.GetBool("TakeControl") and 0 or 1)
+      Send("at set control " .. (AT.GetBool("TakeControl") and "1" or "0"))
+      AT.Print("Steuerungsuebernahme " .. (AT.GetBool("TakeControl") and "AN" or "AUS") ..
+               (AT.GetBool("TakeControl")
+                and " - zuverlaessigere Bewegung, aber du kannst waehrend der Fahrt nichts tun."
+                or  " - du behaeltst die Kontrolle, die Bewegung kann abbrechen."))
 
    elseif cmd == "botan" then AT.Bot.Enable()
    elseif cmd == "botaus" then AT.Bot.Disable()

@@ -210,7 +210,7 @@ local function Build()
 
    frame = CreateFrame("Frame", "AutoTravelOptionsContent", scroll)
    frame:SetWidth(600)
-   frame:SetHeight(740)
+   frame:SetHeight(790)
    scroll:SetScrollChild(frame)
 
    local title = frame:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
@@ -302,36 +302,56 @@ local function Build()
       16, -324, "PlayerOverride"))
 
    table.insert(widgets, Slider(frame, "Wartezeit (s)",
-      "So lange muss Ruhe sein, bis der Bot wieder uebernimmt.",
-      250, -328, 2, 30, 1, "OverrideSeconds"))
+      "So lange muss Ruhe sein, bis die Reise wieder uebernimmt.",
+      250, -324, 2, 30, 1, "OverrideSeconds"))
+
+   table.insert(widgets, Check(frame, "Auch den Bot pausieren",
+      "Standard ist aus: angehalten wird nur die Fahrt, denn sie haelt die " ..
+      "Steuerung. Der Bot darf weiterkaempfen und heilen, waehrend du umziehst. " ..
+      "Ein: der Selbstmodus wird zusaetzlich abgeschaltet und danach wieder " ..
+      "eingeschaltet.",
+      16, -348, "OverridePausesBot"))
+
+   table.insert(widgets, Check(frame, "Steuerung waehrend der Fahrt abgeben",
+      "AN: das Servermodul uebernimmt die Steuerung. Die Bewegung ist deutlich " ..
+      "zuverlaessiger, aber du kannst waehrend der Fahrt weder Ausruestung " ..
+      "wechseln noch zaubern.\n\n" ..
+      "AUS: du behaeltst die Kontrolle. Ausruestungswechsel geht jederzeit, " ..
+      "dafuer kann die Bewegung ins Stocken geraten, weil Client und Spline " ..
+      "gegeneinander arbeiten.",
+      16, -374, "TakeControl", function(v)
+         AT.Send("at set control " .. v)
+      end))
 
    Note(frame, "Tastenbelegung unter Spiel -> Tastatur -> AutoTravel: " ..
-               "'Spielervorrang ein/aus' pausiert von Hand, etwa zum Fluechten.",
-        20, -372)
+               "'Spielervorrang ein/aus' pausiert von Hand, etwa zum Fluechten. " ..
+               "Waehrend des Vorrangs wird die Steuerung immer zurueckgegeben, " ..
+               "unabhaengig von der Einstellung darueber.",
+        20, -400)
 
    -- ---- Reise -----------------------------------------------------------
-   Header(frame, "Reise", 16, -400)
+   Header(frame, "Reise", 16, -440)
 
    table.insert(widgets, Slider(frame, "Zielradius (yd)",
       "Ab dieser Entfernung gilt das Ziel als erreicht.",
-      16, -432, 1, 50, 1, "ArriveYards", function(v) AT.Send("at set arrival " .. v) end))
+      16, -472, 1, 50, 1, "ArriveYards", function(v) AT.Send("at set arrival " .. v) end))
 
    table.insert(widgets, Check(frame, "Ankunft laut melden",
       "Meldungen des Servermoduls im Chat anzeigen statt sie auszublenden.",
-      250, -428, "ShowProtocol", function(v) AT.Set("HideProtocol", (v == 1) and 0 or 1) end))
+      250, -468, "ShowProtocol", function(v) AT.Set("HideProtocol", (v == 1) and 0 or 1) end))
 
    -- ---- Teleport --------------------------------------------------------
-   Header(frame, "Teleport", 16, -476)
+   Header(frame, "Teleport", 16, -516)
 
    table.insert(widgets, Check(frame, "Vor dem Teleport nachfragen",
       "Sicherheitsabfrage, damit der Knopf nicht versehentlich ausloest.",
-      16, -504, "ConfirmTp"))
+      16, -544, "ConfirmTp"))
 
    local tpMode = AT.UI.Button(frame, 180, 22, "", function()
       AT.Set("TeleportMode", (AT.Get("TeleportMode") == "go") and "module" or "go")
       O.Load()
    end)
-   tpMode:SetPoint("TOPLEFT", 250, -502)
+   tpMode:SetPoint("TOPLEFT", 250, -542)
    tpMode.tip = function()
       GameTooltip:AddLine("Wie teleportiert wird")
       GameTooltip:AddLine("Modul: das Servermodul springt selbst (kein GM noetig).", 0.7, 0.7, 0.7, true)
@@ -344,25 +364,25 @@ local function Build()
    table.insert(widgets, tpMode)
 
    -- ---- Anzeige ---------------------------------------------------------
-   Header(frame, "Anzeige", 16, -540)
+   Header(frame, "Anzeige", 16, -580)
 
-   table.insert(widgets, Check(frame, "Panel anzeigen", nil, 16, -568, "PanelVisible",
+   table.insert(widgets, Check(frame, "Panel anzeigen", nil, 16, -608, "PanelVisible",
       function() if AT.UI then AT.UI.Refresh() end end))
-   table.insert(widgets, Check(frame, "Minimap-Knopf", nil, 250, -568, "MinimapButton",
+   table.insert(widgets, Check(frame, "Minimap-Knopf", nil, 250, -608, "MinimapButton",
       function() if AT.UI then AT.UI.RefreshMinimap() end end))
-   table.insert(widgets, Check(frame, "Botbefehle im Chat verbergen", nil, 16, -592, "HideBotCmd"))
+   table.insert(widgets, Check(frame, "Botbefehle im Chat verbergen", nil, 16, -632, "HideBotCmd"))
    table.insert(widgets, Check(frame, "Debug-Ausgaben", "Zeigt jeden gesendeten Befehl und die " ..
-      "Diagnosemeldungen des Servermoduls.", 250, -592, "Debug",
+      "Diagnosemeldungen des Servermoduls.", 250, -632, "Debug",
       function(v) AT.Send("at debug " .. v) end))
 
    -- ---- Playerbot-Befehle ----------------------------------------------
-   Header(frame, "Playerbot-Befehle", 16, -628)
+   Header(frame, "Playerbot-Befehle", 16, -668)
 
-   table.insert(widgets, Edit(frame, "Selbstmodus einschalten", 16, -656, 250, "SelfOnCommand"))
-   table.insert(widgets, Edit(frame, "Selbstmodus ausschalten", 290, -656, 250, "SelfOffCommand"))
+   table.insert(widgets, Edit(frame, "Selbstmodus einschalten", 16, -696, 250, "SelfOnCommand"))
+   table.insert(widgets, Edit(frame, "Selbstmodus ausschalten", 290, -696, 250, "SelfOffCommand"))
 
    Note(frame, "Genaue Schreibweise mit '.playerbots help' pruefen. Enter speichert.",
-        20, -698)
+        20, -738)
 
    outer.refresh = function() O.Load() end
    outer.okay    = function() end

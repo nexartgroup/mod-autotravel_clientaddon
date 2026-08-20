@@ -21,6 +21,17 @@
 --            laeuft -- daraus laesst sich nichts Verlaessliches ableiten.
 --            Dafuer ist die Taste da.
 --
+-- Angehalten wird standardmaessig nur die FAHRT. Sie ist es, die das Steuern
+-- verhindert: solange das Servermodul die Kontrolle haelt, laesst sich weder
+-- Ausruestung wechseln noch zaubern. Der Bot stoert dabei nicht und darf
+-- weiterlaufen -- er kaempft und heilt ja weiter, waehrend du umziehst.
+--
+-- Wer auch den Bot stillstellen will, schaltet das in den Einstellungen ein
+-- ("Auch den Bot pausieren").
+--
+-- Nach der Pause berechnet das Servermodul den Weg von der aktuellen Position
+-- neu und setzt die Reise fort.
+--
 -- Waehrend der Pause ruht auch der Erbstueckschutz. Danach wird die
 -- Ausruestung neu erfasst -- was du selbst angezogen hast, gilt dann als
 -- gewollt und wird nicht zurueckgetauscht.
@@ -71,9 +82,18 @@ function O.Note(reason)
    if not O.active then
       O.active = true
       O.reason = reason
+
+      local what = "Fahrt"
+      -- Die Fahrt ist das Hindernis: sie haelt die Steuerung.
+      if AT.active then AT.Send("at pause 1") end
+
+      if AT.GetBool("OverridePausesBot") and AT.Bot then
+         AT.Bot.Pause()
+         what = "Fahrt und Bot"
+      end
+
       AT.Print("|cffe8c44aSpielervorrang|r (" .. (REASON[reason] or reason or "?") ..
-               ") - der Bot pausiert.")
-      if AT.Bot then AT.Bot.Pause() end
+               ") - " .. what .. " pausiert.")
       if AT.UI then AT.UI.Update() end
    end
 end
@@ -82,9 +102,12 @@ function O.Release(silent)
    if not O.active then return end
    O.active = false
    O.reason = nil
-   if not silent then AT.Print("Spielervorrang beendet - der Bot macht weiter.") end
-   if AT.Gear then AT.Gear.Snapshot(true) end   -- eigene Wahl uebernehmen
-   if AT.Bot then AT.Bot.Resume() end
+   if not silent then
+      AT.Print("Spielervorrang beendet - Weg wird neu berechnet, dann geht es weiter.")
+   end
+   if AT.active then AT.Send("at pause 0") end   -- Server pathet selbst neu
+   if AT.Gear then AT.Gear.Snapshot(true) end    -- eigene Wahl uebernehmen
+   if AT.Bot then AT.Bot.Resume() end            -- nur wenn zuvor pausiert
    if AT.UI then AT.UI.Update() end
 end
 

@@ -29,6 +29,7 @@ local STATE = {
    ["MOUNTING"]        = { "|cffe8c44a", "Mountet",           0.91, 0.77, 0.29 },
    ["TRAVELING"]       = { "|cff53d17a", "Unterwegs",         0.33, 0.82, 0.48 },
    ["PAUSED - COMBAT"] = { "|cffe8654a", "Kampf",             0.91, 0.40, 0.29 },
+   ["PAUSED - SPIELER"]= { "|cffe8c44a", "Du hast Vorrang",   0.91, 0.77, 0.29 },
    ["WARTE AUF FLUG"]  = { "|cff58b6e8", "Wartet auf Flug",   0.35, 0.71, 0.91 },
    ["ARRIVED"]         = { "|cff53d17a", "Angekommen",        0.33, 0.82, 0.48 },
    ["FAILED"]          = { "|cffe8654a", "Fehlgeschlagen",    0.91, 0.40, 0.29 },
@@ -385,7 +386,7 @@ function UI.Update()
    if panel.botBtn then
       if not AT.GetBool("BotControl") then
          panel.botBtn.label:SetText("|cff6a7080gesperrt|r")
-      elseif AT.Override and AT.Override.active then
+      elseif AT.Override and AT.Override.active and AT.GetBool("OverridePausesBot") then
          panel.botBtn.label:SetText("|cffe8c44aPause|r")
       else
          panel.botBtn.label:SetText("Bot " .. AT.Bot.StatusText())
