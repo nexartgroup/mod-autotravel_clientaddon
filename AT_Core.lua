@@ -32,7 +32,7 @@ AutoTravel = AutoTravel or {}
 local AT = AutoTravel
 local CB = AT.Carb
 
-AT.VERSION = "7.9"
+AT.VERSION = "8.0"
 local PREFIX = "|cff33ccffAutoTravel|r: "
 
 AT.active   = false
@@ -63,6 +63,7 @@ local DEFAULTS = {
    PlayerOverride = 1,
    OverrideSeconds = 8,
    OverridePausesBot = 0,
+   GrabMoveKeys   = 1,
    TakeControl    = 1,
    AutoDisableBot = 0,
 }
@@ -288,8 +289,8 @@ function AT.Start()
 
    if not AT.Get("HintShown") then
       AT.Set("HintShown", 1)
-      AT.Print("Zum selbst Laufen: Taste fuer 'Spielervorrang' belegen " ..
-               "(Spiel -> Tastatur -> AutoTravel) oder /at pause.")
+      AT.Print("Zum selbst Laufen einfach eine Bewegungstaste druecken - " ..
+               "die Reise pausiert dann und gibt dir die Steuerung zurueck.")
    end
 
    AT.active = true

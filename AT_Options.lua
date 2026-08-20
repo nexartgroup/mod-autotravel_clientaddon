@@ -307,6 +307,14 @@ local function Build()
       "wieder uebernimmt.",
       250, -324, 2, 30, 1, "OverrideSeconds"))
 
+   table.insert(widgets, Check(frame, "Bewegungstasten abfangen",
+      "Waehrend der Fahrt bewirken WASD und Leertaste ohnehin nichts - der " ..
+      "Client blockiert die Bewegung, solange das Servermodul steuert. " ..
+      "Sie werden deshalb auf den Spielervorrang gelegt: der erste Tastendruck " ..
+      "pausiert die Reise und gibt dir die Steuerung zurueck, ab dem zweiten " ..
+      "laeufst du normal.",
+      250, -348, "GrabMoveKeys", function() AT.Override.UpdateGrab() end))
+
    table.insert(widgets, Check(frame, "Auch den Bot pausieren",
       "Standard ist aus: angehalten wird nur die Fahrt, denn sie haelt die " ..
       "Steuerung. Der Bot darf weiterkaempfen und heilen, waehrend du umziehst. " ..

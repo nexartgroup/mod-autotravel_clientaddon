@@ -16,10 +16,7 @@
 --            Handels-, Quest- und Flugmeisterfenster
 --            Tastenbelegung "AutoTravel: Pause" und /at pause
 --
---   NICHT erkannt: reine Laufbewegung ueber WASD. Der 3.3.5a-Client meldet
---            das nicht, und die Position aendert sich auch, wenn der Bot
---            laeuft -- daraus laesst sich nichts Verlaessliches ableiten.
---            Dafuer ist die Taste da.
+--   erkannt: Bewegungstasten (WASD, Leertaste, Drehen) -- siehe unten.
 --
 -- Angehalten wird standardmaessig nur die FAHRT. Sie ist es, die das Steuern
 -- verhindert: solange das Servermodul die Kontrolle haelt, laesst sich weder
@@ -66,7 +63,7 @@ local REASON = {
    AUCTION_HOUSE_SHOW = "Auktionshaus",
    ITEM_LOCK_CHANGED  = "Gegenstand bewegt",
    UNIT_SPELLCAST_SENT = "eigener Zauber",
-   MANUAL             = "von Hand",
+   MANUAL             = "Taste",
 }
 
 -- ---------------------------------------------------------------------------
@@ -108,6 +105,7 @@ function O.Release(silent)
    if AT.active then AT.Send("at pause 0") end   -- Server pathet selbst neu
    if AT.Gear then AT.Gear.Snapshot(true) end    -- eigene Wahl uebernehmen
    if AT.Bot then AT.Bot.Resume() end            -- nur wenn zuvor pausiert
+   O.UpdateGrab()
    if AT.UI then AT.UI.Update() end
 end
 
@@ -150,6 +148,83 @@ f:SetScript("OnUpdate", function(self, elapsed)
       O.Release()
    end
 end)
+
+-- Zustand der Tastenabfangung regelmaessig nachziehen
+local grabAcc = 0
+keyOwner:SetScript("OnUpdate", function(self, elapsed)
+   grabAcc = grabAcc + elapsed
+   if grabAcc < 0.5 then return end
+   grabAcc = 0
+   O.UpdateGrab()
+end)
+
+-- ---------------------------------------------------------------------------
+-- Bewegungstasten abfangen
+-- ---------------------------------------------------------------------------
+-- Solange das Servermodul die Steuerung haelt, bewirken WASD und Leertaste
+-- ohnehin NICHTS -- der Client blockiert die Bewegung selbst. Genau das laesst
+-- sich ausnutzen: fuer die Dauer der Fahrt werden die Bewegungstasten per
+-- Ueberschreibung auf den Spielervorrang gelegt.
+--
+--   Fahrt laeuft  -> W liegt auf "Spielervorrang"   (bewegt sowieso nicht)
+--   Taste gedrueckt -> Pause, Steuerung kommt zurueck, Ueberschreibung faellt weg
+--   ab jetzt      -> W bewegt wieder ganz normal
+--
+-- Der erste Tastendruck loest also die Pause aus statt zu laufen, jeder
+-- weitere laeuft. Das ist der Preis dafuer, dass 3.3.5a Tastendruecke fuer
+-- Bewegung nicht an Addons meldet und die Bewegungsfunktionen geschuetzt sind.
+
+local MOVE_COMMANDS = {
+   "MOVEFORWARD", "MOVEBACKWARD", "STRAFELEFT", "STRAFERIGHT",
+   "TURNLEFT", "TURNRIGHT", "JUMP", "SITORSTAND",
+}
+
+local keyOwner = CreateFrame("Frame", "AutoTravelKeyGrab")
+O.armed = false
+
+local function ApplyGrab()
+   if O.armed then return end
+   if not SetOverrideBinding then return end
+   if InCombatLockdown and InCombatLockdown() then return end   -- spaeter erneut
+
+   local n = 0
+   for _, cmd in ipairs(MOVE_COMMANDS) do
+      local k1, k2 = GetBindingKey(cmd)
+      for _, key in ipairs({ k1, k2 }) do
+         if key then
+            if pcall(SetOverrideBinding, keyOwner, true, key, "AUTOTRAVEL_PAUSE") then
+               n = n + 1
+            end
+         end
+      end
+   end
+
+   if n > 0 then
+      O.armed = true
+      AT.Debug("Bewegungstasten abgefangen (" .. n .. ").")
+   end
+end
+
+local function ReleaseGrab()
+   if not O.armed then return end
+   O.armed = false
+   if ClearOverrideBindings then pcall(ClearOverrideBindings, keyOwner) end
+   AT.Debug("Bewegungstasten wieder frei.")
+end
+
+O.ApplyGrab = ApplyGrab
+O.ReleaseGrab = ReleaseGrab
+
+-- Abfangen nur, wenn die Fahrt laeuft UND der Server die Steuerung haelt.
+-- Ohne Kontrolluebernahme wuerden wir echte Bewegung blockieren.
+function O.UpdateGrab()
+   if not AT.GetBool("GrabMoveKeys") then ReleaseGrab() return end
+   if not AT.active or O.active then ReleaseGrab() return end
+   if not AT.GetBool("TakeControl") then ReleaseGrab() return end
+   local st = AT.status and AT.status.state
+   if st == "PAUSED - SPIELER" or st == "IDLE" then ReleaseGrab() return end
+   ApplyGrab()
+end
 
 function O.StatusText()
    if not O.Enabled() then return "|cff6a7080aus|r" end
