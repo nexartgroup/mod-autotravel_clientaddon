@@ -296,18 +296,16 @@ local function Build()
 
    table.insert(widgets, Check(frame, "Eigene Aktionen haben Vorrang",
       "Sobald du selbst etwas tust, pausiert die Reise und macht danach weiter. " ..
-      "Eigenes Laufen und Springen erkennt das Servermodul an den " ..
-      "Bewegungsflaggen deines Clients. Diese Option ergaenzt das um Zauber, " ..
-      "Gegenstaende bewegen und geoeffnete Fenster (Beute, Haendler, Bank, " ..
-      "Post, Handel, Quest, Flugmeister).",
+      "Erkannt werden eigene Zauber, Gegenstaende bewegen und geoeffnete Fenster " ..
+      "(Beute, Haendler, Bank, Post, Handel, Quest, Flugmeister).\n\n" ..
+      "Eigenes LAUFEN laesst sich nicht erkennen - weder im Client noch am " ..
+      "Server. Dafuer gibt es die Tastenbelegung 'Spielervorrang ein/aus'.",
       16, -324, "PlayerOverride"))
 
    table.insert(widgets, Slider(frame, "Wartezeit (s)",
-      "So lange muss nach der letzten Eingabe Ruhe sein, bis die Reise wieder " ..
-      "uebernimmt.",
-      250, -324, 2, 30, 1, "OverrideSeconds", function(v)
-         AT.Send("at set inputwait " .. v)
-      end))
+      "So lange muss nach der letzten erkannten Aktion Ruhe sein, bis die Reise " ..
+      "wieder uebernimmt.",
+      250, -324, 2, 30, 1, "OverrideSeconds"))
 
    table.insert(widgets, Check(frame, "Auch den Bot pausieren",
       "Standard ist aus: angehalten wird nur die Fahrt, denn sie haelt die " ..
@@ -317,12 +315,11 @@ local function Build()
       16, -348, "OverridePausesBot"))
 
    table.insert(widgets, Check(frame, "Steuerung waehrend der Fahrt abgeben",
-      "AUS (Standard): du behaeltst WASD, Leertaste und alle Faehigkeiten. " ..
-      "Greifst du ein, pausiert die Reise und uebernimmt nach der Wartezeit " ..
-      "wieder.\n\n" ..
-      "AN: das Servermodul uebernimmt die Steuerung vollstaendig. Die Bewegung " ..
-      "ist dadurch stabiler, aber du kannst waehrend der Fahrt nicht selbst " ..
-      "laufen, springen oder zaubern.",
+      "AN (Standard und noetig): das Servermodul uebernimmt die Steuerung. " ..
+      "Waehrend der Fahrt kannst du nicht selbst laufen - zaubern, Gegenstaende " ..
+      "benutzen und Ausruestung wechseln geht weiterhin.\n\n" ..
+      "AUS: der 3.3.5a-Client ignoriert Splines fuer die Einheit, die er selbst " ..
+      "steuert. Der Charakter bewegt sich dann gar nicht. Nur zur Fehlersuche.",
       16, -374, "TakeControl", function(v)
          AT.Send("at set control " .. v)
       end))
