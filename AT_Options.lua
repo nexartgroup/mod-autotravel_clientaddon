@@ -295,15 +295,19 @@ local function Build()
    Header(frame, "Spielervorrang", 16, -296)
 
    table.insert(widgets, Check(frame, "Eigene Aktionen haben Vorrang",
-      "Sobald du selbst etwas tust, pausiert der Bot und macht danach weiter. " ..
-      "Erkannt werden eigene Zauber, Gegenstaende bewegen und geoeffnete Fenster " ..
-      "(Beute, Haendler, Bank, Post, Handel, Quest, Flugmeister). Reines Laufen " ..
-      "meldet der 3.3.5a-Client nicht - dafuer gibt es eine Tastenbelegung.",
+      "Sobald du selbst etwas tust, pausiert die Reise und macht danach weiter. " ..
+      "Eigenes Laufen und Springen erkennt das Servermodul an den " ..
+      "Bewegungsflaggen deines Clients. Diese Option ergaenzt das um Zauber, " ..
+      "Gegenstaende bewegen und geoeffnete Fenster (Beute, Haendler, Bank, " ..
+      "Post, Handel, Quest, Flugmeister).",
       16, -324, "PlayerOverride"))
 
    table.insert(widgets, Slider(frame, "Wartezeit (s)",
-      "So lange muss Ruhe sein, bis die Reise wieder uebernimmt.",
-      250, -324, 2, 30, 1, "OverrideSeconds"))
+      "So lange muss nach der letzten Eingabe Ruhe sein, bis die Reise wieder " ..
+      "uebernimmt.",
+      250, -324, 2, 30, 1, "OverrideSeconds", function(v)
+         AT.Send("at set inputwait " .. v)
+      end))
 
    table.insert(widgets, Check(frame, "Auch den Bot pausieren",
       "Standard ist aus: angehalten wird nur die Fahrt, denn sie haelt die " ..
@@ -313,12 +317,12 @@ local function Build()
       16, -348, "OverridePausesBot"))
 
    table.insert(widgets, Check(frame, "Steuerung waehrend der Fahrt abgeben",
-      "AN: das Servermodul uebernimmt die Steuerung. Die Bewegung ist deutlich " ..
-      "zuverlaessiger, aber du kannst waehrend der Fahrt weder Ausruestung " ..
-      "wechseln noch zaubern.\n\n" ..
-      "AUS: du behaeltst die Kontrolle. Ausruestungswechsel geht jederzeit, " ..
-      "dafuer kann die Bewegung ins Stocken geraten, weil Client und Spline " ..
-      "gegeneinander arbeiten.",
+      "AUS (Standard): du behaeltst WASD, Leertaste und alle Faehigkeiten. " ..
+      "Greifst du ein, pausiert die Reise und uebernimmt nach der Wartezeit " ..
+      "wieder.\n\n" ..
+      "AN: das Servermodul uebernimmt die Steuerung vollstaendig. Die Bewegung " ..
+      "ist dadurch stabiler, aber du kannst waehrend der Fahrt nicht selbst " ..
+      "laufen, springen oder zaubern.",
       16, -374, "TakeControl", function(v)
          AT.Send("at set control " .. v)
       end))

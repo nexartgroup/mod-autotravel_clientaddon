@@ -32,7 +32,7 @@ AutoTravel = AutoTravel or {}
 local AT = AutoTravel
 local CB = AT.Carb
 
-AT.VERSION = "7.6"
+AT.VERSION = "7.7"
 local PREFIX = "|cff33ccffAutoTravel|r: "
 
 AT.active   = false
@@ -63,7 +63,7 @@ local DEFAULTS = {
    PlayerOverride = 1,
    OverrideSeconds = 8,
    OverridePausesBot = 0,
-   TakeControl    = 1,
+   TakeControl    = 0,
    AutoDisableBot = 0,
 }
 
@@ -285,6 +285,7 @@ function AT.Start()
    end
 
    Send("at set control " .. (AT.GetBool("TakeControl") and "1" or "0"))
+   Send("at set inputwait " .. (tonumber(AT.Get("OverrideSeconds")) or 8))
 
    AT.active = true
    AT.status.state  = "STARTING"
@@ -552,6 +553,7 @@ SlashCmdList["AUTOTRAVEL"] = function(input)
    elseif cmd == "kontrolle" then
       AT.Set("TakeControl", AT.GetBool("TakeControl") and 0 or 1)
       Send("at set control " .. (AT.GetBool("TakeControl") and "1" or "0"))
+   Send("at set inputwait " .. (tonumber(AT.Get("OverrideSeconds")) or 8))
       AT.Print("Steuerungsuebernahme " .. (AT.GetBool("TakeControl") and "AN" or "AUS") ..
                (AT.GetBool("TakeControl")
                 and " - zuverlaessigere Bewegung, aber du kannst waehrend der Fahrt nichts tun."
