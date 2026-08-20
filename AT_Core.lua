@@ -32,12 +32,13 @@ AutoTravel = AutoTravel or {}
 local AT = AutoTravel
 local CB = AT.Carb
 
-AT.VERSION = "8.0"
+AT.VERSION = "9.0"
 local PREFIX = "|cff33ccffAutoTravel|r: "
 
 AT.active   = false
 AT.lastRx   = 0
-AT.status   = { state = "IDLE", distance = 0, target = "-", mounted = 0, nodes = 0, attempts = 0 }
+AT.status   = { state = "IDLE", distance = 0, target = "-", mounted = 0,
+                nodes = 0, attempts = 0, owner = "TRAVEL", approach = 0 }
 
 local pendingGo = nil     -- wartet auf [AT]W fuer den .go-xyz-Modus
 
@@ -61,7 +62,7 @@ local DEFAULTS = {
    GuardAlways    = 1,
    EquipCommand   = "e %s",
    PlayerOverride = 1,
-   OverrideSeconds = 8,
+   OverrideSeconds = 5,
    OverridePausesBot = 0,
    GrabMoveKeys   = 1,
    TakeControl    = 1,
@@ -100,6 +101,14 @@ AT.Send = Send
 -- Serverbefehle und Fluesterbefehle sich nicht ins Gehege kommen.
 function AT.Queue(fn)
    table.insert(sendQueue, fn)
+end
+
+-- Sofort senden, an der Warteschlange vorbei. Nur fuer die Kontrollabgabe:
+-- dort zaehlt jede Zehntelsekunde, weil der Mensch auf die Steuerung wartet.
+function AT.SendNow(cmd)
+   SendChatMessage("." .. cmd, "SAY")
+   lastSent = GetTime()
+   AT.Debug("-> (sofort) ." .. cmd)
 end
 
 local pump = CreateFrame("Frame")
@@ -365,9 +374,17 @@ local function HandleProtocol(msg)
    local body = string.sub(msg, 7)
 
    if kind == "S" then
-      local st, dist, target, mounted, nodes, att =
-         string.match(body, "^([^|]*)|([^|]*)|([^|]*)|([^|]*)|([^|]*)|([^|]*)$")
+      local st, dist, target, mounted, nodes, att, owner, approach =
+         string.match(body,
+            "^([^|]*)|([^|]*)|([^|]*)|([^|]*)|([^|]*)|([^|]*)|([^|]*)|([^|]*)$")
+      if not st then
+         -- aeltere Servermodule ohne die beiden neuen Felder
+         st, dist, target, mounted, nodes, att =
+            string.match(body, "^([^|]*)|([^|]*)|([^|]*)|([^|]*)|([^|]*)|([^|]*)$")
+      end
       if st then
+         AT.status.owner    = owner or "TRAVEL"
+         AT.status.approach = tonumber(approach) or 0
          AT.status.state    = st
          AT.status.distance = tonumber(dist) or 0
          AT.status.target   = target
@@ -486,7 +503,8 @@ local function Help()
       "/at erbstuecke test   welche Anlegewege kennt der Client?",
       "/at botan | botaus    Selbstmodus von Hand schalten",
       "/at profile           eigene Profile bearbeiten",
-      "/at pause             Spielervorrang von Hand ein/aus",
+      "/at pause             ausdrueckliche Pause (laeuft nicht von selbst ab)",
+      "/at weiter            Pause beenden",
       "/at kontrolle         Steuerungsuebernahme waehrend der Fahrt",
       "/at selfon <befehl>   Befehl zum Einschalten des Selbstmodus",
       "/at selfoff <befehl>  Befehl zum Ausschalten",
@@ -554,7 +572,8 @@ SlashCmdList["AUTOTRAVEL"] = function(input)
          AT.Print("Erbstueckschutz " .. (AT.GetBool("GuardHeirlooms") and "AN" or "AUS"))
       end
 
-   elseif cmd == "pause" then AT.Override.Toggle()
+   elseif cmd == "pause" then AT.Human.ManualPause()
+   elseif cmd == "weiter" or cmd == "resume" then AT.Human.Resume()
 
    elseif cmd == "kontrolle" then
       AT.Set("TakeControl", AT.GetBool("TakeControl") and 0 or 1)

@@ -203,8 +203,8 @@ local function BuildPanel()
    botBtn:SetPoint("TOPLEFT", 154, -100)
    botBtn.tip = function()
       GameTooltip:AddLine("Playerbot-Selbstmodus")
-      GameTooltip:AddLine("Spielervorrang: " ..
-         string.gsub(AT.Override.StatusText(), "|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""), 1, 1, 1)
+      GameTooltip:AddLine("Kontrolle: " ..
+         string.gsub(AT.Human.StatusText(), "|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""), 1, 1, 1)
       GameTooltip:AddLine("Klicken schaltet ihn ein oder aus.", 0.7, 0.7, 0.7)
       GameTooltip:AddLine("Er bleibt beim Reiseende an, solange", 0.7, 0.7, 0.7)
       GameTooltip:AddLine("in den Einstellungen nichts anderes steht.", 0.7, 0.7, 0.7)
@@ -352,7 +352,9 @@ function UI.Update()
 
    panel.dot:SetVertexColor(d[3], d[4], d[5], 1)
    panel.lState:SetText(d[1] .. d[2] .. "|r")
-   panel.lTarget:SetText("|cffdde2ea" .. tostring(s.target or "-") .. "|r")
+   panel.lTarget:SetText("|cffdde2ea" .. tostring(s.target or "-") .. "|r" ..
+      ((s.approach and s.approach > 0)
+       and string.format("  |cffe8c44a(Umweg %d yd)|r", s.approach) or ""))
 
    -- Fortschritt: von der Startentfernung herunter
    if AT.active and s.distance and s.distance > 0 then
@@ -386,7 +388,7 @@ function UI.Update()
    if panel.botBtn then
       if not AT.GetBool("BotControl") then
          panel.botBtn.label:SetText("|cff6a7080gesperrt|r")
-      elseif AT.Override and AT.Override.active and AT.GetBool("OverridePausesBot") then
+      elseif AT.Human and AT.Human.IsHuman() and AT.GetBool("OverridePausesBot") then
          panel.botBtn.label:SetText("|cffe8c44aPause|r")
       else
          panel.botBtn.label:SetText("Bot " .. AT.Bot.StatusText())

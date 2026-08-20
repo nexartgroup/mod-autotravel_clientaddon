@@ -62,9 +62,9 @@ G.FindInBags = FindInBags
 -- Schutz aktiv? Entweder dauerhaft oder nur waehrend einer Reise.
 function G.IsActive()
    if not AT.GetBool("GuardHeirlooms") then return false end
-   -- Waehrend des Spielervorrangs nicht dazwischenfunken: dann zieht der
+   -- Waehrend menschlicher Kontrolle nicht dazwischenfunken: dann zieht der
    -- Spieler bewusst um.
-   if AT.Override and AT.Override.active then return false end
+   if AT.Human and AT.Human.IsHuman() then return false end
    if AT.GetBool("GuardAlways") then return true end
    return AT.active == true
 end

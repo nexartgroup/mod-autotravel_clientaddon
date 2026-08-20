@@ -1,6 +1,10 @@
 <Bindings>
-    <Binding name="AUTOTRAVEL_PAUSE" header="AUTOTRAVEL" runOnUp="false">
-        AutoTravel.Override.Toggle()
+    <!-- Wird von den abgefangenen Bewegungstasten ausgeloest -->
+    <Binding name="AUTOTRAVEL_GRAB" header="AUTOTRAVEL" runOnUp="false">
+        AutoTravel.Override.OnGrabbedKey()
+    </Binding>
+    <Binding name="AUTOTRAVEL_PAUSE" runOnUp="false">
+        AutoTravel.Human.Toggle()
     </Binding>
     <Binding name="AUTOTRAVEL_TOGGLE" runOnUp="false">
         AutoTravel.Toggle()
