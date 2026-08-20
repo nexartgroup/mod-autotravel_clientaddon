@@ -32,7 +32,7 @@ AutoTravel = AutoTravel or {}
 local AT = AutoTravel
 local CB = AT.Carb
 
-AT.VERSION = "9.1"
+AT.VERSION = "10.0"
 local PREFIX = "|cff33ccffAutoTravel|r: "
 
 AT.active   = false
@@ -66,6 +66,7 @@ local DEFAULTS = {
    OverridePausesBot = 0,
    GrabMoveKeys   = 1,
    TakeControl    = 1,
+   RouteProfile   = "korridor",
    AutoDisableBot = 0,
 }
 
@@ -295,6 +296,7 @@ function AT.Start()
    end
 
    Send("at set control " .. (AT.GetBool("TakeControl") and "1" or "0"))
+   Send("at set profil " .. tostring(AT.Get("RouteProfile") or "korridor"))
 
    if not AT.Get("HintShown") then
       AT.Set("HintShown", 1)
@@ -495,6 +497,7 @@ local function Help()
       "/at koords            Weltkoordinaten des Ziels anzeigen",
       "/at diag              Diagnose: warum scheitert der Pfad?",
       "/at knoten            Zustand des Playerbot-Knotengraphen",
+      "/at route <profil>    korridor | kurz | schnell | sicher | zufuss",
       "/at route             Stuetzpunkte der Carbonite-Route anzeigen",
       "/at profil            Profil wechseln (ohne Argument: Liste)",
       "/at bot               Playerbot-Steuerung an/aus",
@@ -575,9 +578,14 @@ SlashCmdList["AUTOTRAVEL"] = function(input)
    elseif cmd == "pause" then AT.Human.ManualPause()
    elseif cmd == "weiter" or cmd == "resume" then AT.Human.Resume()
 
+   elseif cmd == "route" and rest ~= "" then
+      Send("at set profil " .. string.lower(rest))
+      AT.Set("RouteProfile", string.lower(rest))
+
    elseif cmd == "kontrolle" then
       AT.Set("TakeControl", AT.GetBool("TakeControl") and 0 or 1)
       Send("at set control " .. (AT.GetBool("TakeControl") and "1" or "0"))
+   Send("at set profil " .. tostring(AT.Get("RouteProfile") or "korridor"))
       AT.Print("Steuerungsuebernahme " .. (AT.GetBool("TakeControl") and "AN" or "AUS") ..
                (AT.GetBool("TakeControl")
                 and " - zuverlaessigere Bewegung, aber du kannst waehrend der Fahrt nichts tun."
