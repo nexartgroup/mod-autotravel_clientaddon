@@ -32,7 +32,7 @@ AutoTravel = AutoTravel or {}
 local AT = AutoTravel
 local CB = AT.Carb
 
-AT.VERSION = "7.0"
+AT.VERSION = "8.1"
 local PREFIX = "|cff33ccffAutoTravel|r: "
 
 AT.active   = false
@@ -60,6 +60,21 @@ local DEFAULTS = {
    GuardHeirlooms = 1,
    GuardAlways    = 1,
    AutoDisableBot = 0,
+
+   -- ---------------------------------------------------------------
+   -- Natuerliche Navigation
+   -- ---------------------------------------------------------------
+   --
+   -- Diese Werte werden an das Servermodul uebergeben.
+   -- Das Addon berechnet keine NavMesh-Wege selbst.
+   --
+   NaturalPathing           = 1,
+   ContourProbing           = 1,
+   ContourTriggerElevation  = 15,
+   ContourTriggerSlope      = 20,
+   ContourNarrowOffset      = 100,
+   ContourWideOffset        = 180,
+   ContourMaxDistanceFactor = 250,
 }
 
 function AT.Print(m) if DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage(PREFIX .. tostring(m or "")) end end
@@ -75,7 +90,30 @@ function AT.Get(k)
 end
 function AT.Set(k, v) AutoTravelDB = AutoTravelDB or {} AutoTravelDB[k] = v end
 function AT.GetBool(k) local v = AT.Get(k) return v == 1 or v == true end
+function AT.SetServerOption(key, value)
+   if value == nil then return end
 
+   AT.Set(key, value)
+
+   -- Der Server nimmt Dezimalwerte mit Punkt entgegen.
+   local v = tostring(value)
+   v = string.gsub(v, ",", ".")
+
+   Send("at set " .. tostring(key) .. " " .. v)
+
+   AT.Debug("Serveroption: " .. tostring(key) .. " = " .. v)
+end
+
+function AT.SetServerBool(key, value)
+   local v = (value == 1 or value == true) and 1 or 0
+   AT.SetServerOption(key, v)
+end
+
+function AT.SetServerNumber(key, value)
+   value = tonumber(value)
+   if not value then return end
+   AT.SetServerOption(key, value)
+end
 -- ---------------------------------------------------------------------------
 -- Senden
 -- ---------------------------------------------------------------------------

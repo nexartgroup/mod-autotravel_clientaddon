@@ -175,7 +175,11 @@ local function BuildPanel()
    local info = f:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
    info:SetPoint("TOPRIGHT", -12, -82)
    f.lInfo = info
-
+   local nav = f:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+   nav:SetPoint("TOPLEFT", 12, -94)
+   nav:SetWidth(202)
+   nav:SetJustifyH("LEFT")
+   f.lNav = nav
    -- Profil und Botschalter getrennt
    local prof = UI.Button(f, 138, 20, "", function()
       local pr = AT.Bot.Next()
@@ -183,7 +187,7 @@ local function BuildPanel()
       if AT.Bot.IsRunning() then AT.Bot.ApplyProfile() end
       UI.Update()
    end)
-   prof:SetPoint("TOPLEFT", 12, -100)
+   prof:SetPoint("TOPLEFT", 12, -118)
    prof.tip = function()
       GameTooltip:AddLine("Verhalten des Playerbots")
       local cur = AT.Bot.Current()
@@ -199,7 +203,7 @@ local function BuildPanel()
    f.prof = prof
 
    local botBtn = UI.Button(f, 60, 20, "", function() AT.Bot.Toggle() end)
-   botBtn:SetPoint("TOPLEFT", 154, -100)
+   botBtn:SetPoint("TOPLEFT", 154, -118)
    botBtn.tip = function()
       GameTooltip:AddLine("Playerbot-Selbstmodus")
       GameTooltip:AddLine("Klicken schaltet ihn ein oder aus.", 0.7, 0.7, 0.7)
@@ -214,7 +218,7 @@ local function BuildPanel()
       AT.Print("Erbstueckschutz " .. (AT.GetBool("GuardHeirlooms") and "AN" or "AUS"))
       UI.Update()
    end)
-   heir:SetPoint("TOPLEFT", 12, -122)
+   heir:SetPoint("TOPLEFT", 12, -140)
    heir.tip = function()
       GameTooltip:AddLine("Erbstuecke schuetzen")
       GameTooltip:AddLine("Angelegte Teile der Qualitaetsstufe 7 werden", 0.7, 0.7, 0.7)
@@ -394,6 +398,29 @@ function UI.Update()
             (AT.GetBool("GuardAlways") and "immer" or "nur auf Reisen") .. ")|r")
       else
          panel.heir.label:SetText("|cff6a7080Erbstueckschutz aus|r")
+      end
+   end
+
+   if f.lNav then
+      local natural =
+         AT.GetBool("NaturalPathing")
+
+      local contour =
+         AT.GetBool("ContourProbing")
+
+      if natural and contour then
+         f.lNav:SetText(
+            "|cff53d17aNatuerliche Navigation|r  " ..
+            "|cff58b6e8Contour aktiv|r")
+      elseif natural then
+         f.lNav:SetText(
+            "|cff53d17aNatuerliche Navigation|r")
+      elseif contour then
+         f.lNav:SetText(
+            "|cff58b6e8Contour aktiv|r")
+      else
+         f.lNav:SetText(
+            "|cff9099a8Normale Navigation|r")
       end
    end
 

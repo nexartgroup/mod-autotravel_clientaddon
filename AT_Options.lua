@@ -255,55 +255,199 @@ local function Build()
 
    table.insert(widgets, Slider(frame, "Zielradius (yd)",
       "Ab dieser Entfernung gilt das Ziel als erreicht.",
-      16, -308, 1, 50, 1, "ArriveYards", function(v) AT.Send("at set arrival " .. v) end))
+      16, -308, 1, 50, 1, "ArriveYards",
+      function(v)
+         AT.Send("at set arrival " .. v)
+      end))
 
    table.insert(widgets, Check(frame, "Ankunft laut melden",
       "Meldungen des Servermoduls im Chat anzeigen statt sie auszublenden.",
-      250, -304, "ShowProtocol", function(v) AT.Set("HideProtocol", (v == 1) and 0 or 1) end))
+      250, -304, "ShowProtocol",
+      function(v)
+         AT.Set("HideProtocol", (v == 1) and 0 or 1)
+      end))
+
+
+   -- ---- Natuerliche Navigation -----------------------------------------
+   Header(frame, "Natuerliche Navigation", 16, -352)
+
+   table.insert(widgets, Check(frame,
+      "Natuerliche Wege bevorzugen",
+      "Bewertet mehrere gueltige NavMesh-Wege. Flache und natuerliche Wege " ..
+      "werden gegen steile Berganstiege bevorzugt, solange der Umweg " ..
+      "nicht unverhaeltnismaessig gross wird.",
+      16, -382,
+      "NaturalPathing",
+      function(v)
+         AT.SetServerBool("natural", v)
+      end))
+
+   table.insert(widgets, Check(frame,
+      "Contour-Probing",
+      "Wenn der gewaehlte Weg wie ein Berganstieg aussieht, sucht das " ..
+      "Servermodul automatisch links und rechts nach einem Weg um den Berg.",
+      250, -382,
+      "ContourProbing",
+      function(v)
+         AT.SetServerBool("contour", v)
+      end))
+
+   table.insert(widgets, Slider(frame,
+      "Berg-Hoehengewinn",
+      "Hoehengewinn in Yards, ab dem ein Weg als moeglicher Berganstieg " ..
+      "behandelt wird.",
+      16, -420,
+      5, 50, 1,
+      "ContourTriggerElevation",
+      function(v)
+         AT.SetServerNumber("contour_elevation", v)
+      end))
+
+   table.insert(widgets, Slider(frame,
+      "Berg-Steigung (%)",
+      "Durchschnittliche Steigung, ab der Contour-Probing aktiviert wird.",
+      290, -420,
+      5, 50, 1,
+      "ContourTriggerSlope",
+      function(v)
+         AT.SetServerNumber("contour_slope", v / 100)
+      end))
+
+   table.insert(widgets, Slider(frame,
+      "Contour nah (yd)",
+      "Erster Suchabstand links und rechts vom direkten Weg.",
+      16, -466,
+      50, 250, 10,
+      "ContourNarrowOffset",
+      function(v)
+         AT.SetServerNumber("contour_narrow", v)
+      end))
+
+   table.insert(widgets, Slider(frame,
+      "Contour weit (yd)",
+      "Zweiter, weiterer Suchabstand links und rechts vom direkten Weg.",
+      290, -466,
+      100, 400, 10,
+      "ContourWideOffset",
+      function(v)
+         AT.SetServerNumber("contour_wide", v)
+      end))
+
+   table.insert(widgets, Slider(frame,
+      "Max. Contour-Umweg (%)",
+      "Maximal erlaubte Contour-Laenge relativ zur direkten Route.",
+      16, -512,
+      120, 500, 10,
+      "ContourMaxDistanceFactor",
+      function(v)
+         AT.SetServerNumber("contour_factor", v / 100)
+      end))
+
+   Note(frame,
+      "Contour-Probing wird nur aktiviert, wenn der normale Weg einen " ..
+      "nachhaltigen steilen Anstieg enthaelt. Dadurch entstehen normalerweise " ..
+      "keine zusaetzlichen PathGenerator-Abfragen.",
+      20, -558, 540)
+
 
    -- ---- Teleport --------------------------------------------------------
-   Header(frame, "Teleport", 16, -352)
+   Header(frame, "Teleport", 16, -604)
 
-   table.insert(widgets, Check(frame, "Vor dem Teleport nachfragen",
+   table.insert(widgets, Check(frame,
+      "Vor dem Teleport nachfragen",
       "Sicherheitsabfrage, damit der Knopf nicht versehentlich ausloest.",
-      16, -380, "ConfirmTp"))
+      16, -632, "ConfirmTp"))
 
    local tpMode = AT.UI.Button(frame, 180, 22, "", function()
-      AT.Set("TeleportMode", (AT.Get("TeleportMode") == "go") and "module" or "go")
+      AT.Set("TeleportMode",
+         (AT.Get("TeleportMode") == "go")
+            and "module"
+            or "go")
+
       O.Load()
    end)
-   tpMode:SetPoint("TOPLEFT", 250, -378)
+
+   tpMode:SetPoint("TOPLEFT", 250, -630)
+
    tpMode.tip = function()
       GameTooltip:AddLine("Wie teleportiert wird")
-      GameTooltip:AddLine("Modul: das Servermodul springt selbst (kein GM noetig).", 0.7, 0.7, 0.7, true)
-      GameTooltip:AddLine("go xyz: Weltkoordinaten abfragen, dann den GM-Befehl benutzen.", 0.7, 0.7, 0.7, true)
+      GameTooltip:AddLine(
+         "Modul: das Servermodul springt selbst (kein GM noetig).",
+         0.7, 0.7, 0.7, true)
+
+      GameTooltip:AddLine(
+         "go xyz: Weltkoordinaten abfragen, dann den GM-Befehl benutzen.",
+         0.7, 0.7, 0.7, true)
    end
+
    tpMode.Load = function()
-      tpMode.label:SetText("Weg: |cffdde2ea" ..
-         ((AT.Get("TeleportMode") == "go") and ".go xyz" or "Servermodul") .. "|r")
+      tpMode.label:SetText(
+         "Weg: |cffdde2ea" ..
+         ((AT.Get("TeleportMode") == "go")
+            and ".go xyz"
+            or "Servermodul") ..
+         "|r")
    end
+
    table.insert(widgets, tpMode)
 
-   -- ---- Anzeige ---------------------------------------------------------
-   Header(frame, "Anzeige", 16, -420)
 
-   table.insert(widgets, Check(frame, "Panel anzeigen", nil, 16, -448, "PanelVisible",
-      function() if AT.UI then AT.UI.Refresh() end end))
-   table.insert(widgets, Check(frame, "Minimap-Knopf", nil, 250, -448, "MinimapButton",
-      function() if AT.UI then AT.UI.RefreshMinimap() end end))
-   table.insert(widgets, Check(frame, "Botbefehle im Chat verbergen", nil, 16, -474, "HideBotCmd"))
-   table.insert(widgets, Check(frame, "Debug-Ausgaben", "Zeigt jeden gesendeten Befehl und die " ..
-      "Diagnosemeldungen des Servermoduls.", 250, -474, "Debug",
-      function(v) AT.Send("at debug " .. v) end))
+   -- ---- Anzeige ---------------------------------------------------------
+   Header(frame, "Anzeige", 16, -680)
+
+   table.insert(widgets, Check(frame,
+      "Panel anzeigen",
+      nil,
+      16, -708,
+      "PanelVisible",
+      function()
+         if AT.UI then AT.UI.Refresh() end
+      end))
+
+   table.insert(widgets, Check(frame,
+      "Minimap-Knopf",
+      nil,
+      250, -708,
+      "MinimapButton",
+      function()
+         if AT.UI then AT.UI.RefreshMinimap() end
+      end))
+
+   table.insert(widgets, Check(frame,
+      "Botbefehle im Chat verbergen",
+      nil,
+      16, -734,
+      "HideBotCmd"))
+
+   table.insert(widgets, Check(frame,
+      "Debug-Ausgaben",
+      "Zeigt jeden gesendeten Befehl und die Diagnosemeldungen " ..
+      "des Servermoduls.",
+      250, -734,
+      "Debug",
+      function(v)
+         AT.Send("at debug " .. v)
+      end))
+
 
    -- ---- Playerbot-Befehle ----------------------------------------------
-   Header(frame, "Playerbot-Befehle", 16, -510)
+   Header(frame, "Playerbot-Befehle", 16, -770)
 
-   table.insert(widgets, Edit(frame, "Selbstmodus einschalten", 16, -538, 250, "SelfOnCommand"))
-   table.insert(widgets, Edit(frame, "Selbstmodus ausschalten", 290, -538, 250, "SelfOffCommand"))
+   table.insert(widgets, Edit(frame,
+      "Selbstmodus einschalten",
+      16, -798,
+      250,
+      "SelfOnCommand"))
 
-   Note(frame, "Genaue Schreibweise mit '.playerbots help' pruefen. Enter speichert.",
-        20, -580)
+   table.insert(widgets, Edit(frame,
+      "Selbstmodus ausschalten",
+      290, -798,
+      250,
+      "SelfOffCommand"))
+
+   Note(frame,
+      "Genaue Schreibweise mit '.playerbots help' pruefen. Enter speichert.",
+      20, -840)
 
    frame.refresh = function() O.Load() end
    frame.okay    = function() end
