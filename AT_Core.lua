@@ -32,13 +32,12 @@ AutoTravel = AutoTravel or {}
 local AT = AutoTravel
 local CB = AT.Carb
 
-AT.VERSION = "10.1"
+AT.VERSION = "7.0"
 local PREFIX = "|cff33ccffAutoTravel|r: "
 
 AT.active   = false
 AT.lastRx   = 0
-AT.status   = { state = "IDLE", distance = 0, target = "-", mounted = 0,
-                nodes = 0, attempts = 0, owner = "TRAVEL", approach = 0 }
+AT.status   = { state = "IDLE", distance = 0, target = "-", mounted = 0, nodes = 0, attempts = 0 }
 
 local pendingGo = nil     -- wartet auf [AT]W fuer den .go-xyz-Modus
 
@@ -60,13 +59,6 @@ local DEFAULTS = {
    ShowProtocol   = 0,
    GuardHeirlooms = 1,
    GuardAlways    = 1,
-   EquipCommand   = "e %s",
-   PlayerOverride = 1,
-   OverrideSeconds = 5,
-   OverridePausesBot = 0,
-   GrabMoveKeys   = 1,
-   TakeControl    = 1,
-   RouteProfile   = "korridor",
    AutoDisableBot = 0,
 }
 
@@ -102,14 +94,6 @@ AT.Send = Send
 -- Serverbefehle und Fluesterbefehle sich nicht ins Gehege kommen.
 function AT.Queue(fn)
    table.insert(sendQueue, fn)
-end
-
--- Sofort senden, an der Warteschlange vorbei. Nur fuer die Kontrollabgabe:
--- dort zaehlt jede Zehntelsekunde, weil der Mensch auf die Steuerung wartet.
-function AT.SendNow(cmd)
-   SendChatMessage("." .. cmd, "SAY")
-   lastSent = GetTime()
-   AT.Debug("-> (sofort) ." .. cmd)
 end
 
 local pump = CreateFrame("Frame")
@@ -295,15 +279,6 @@ function AT.Start()
       Send("at start " .. args)
    end
 
-   Send("at set control " .. (AT.GetBool("TakeControl") and "1" or "0"))
-   Send("at set profil " .. tostring(AT.Get("RouteProfile") or "korridor"))
-
-   if not AT.Get("HintShown") then
-      AT.Set("HintShown", 1)
-      AT.Print("Zum selbst Laufen einfach eine Bewegungstaste druecken - " ..
-               "die Reise pausiert dann und gibt dir die Steuerung zurueck.")
-   end
-
    AT.active = true
    AT.status.state  = "STARTING"
    AT.status.target = name
@@ -376,17 +351,9 @@ local function HandleProtocol(msg)
    local body = string.sub(msg, 7)
 
    if kind == "S" then
-      local st, dist, target, mounted, nodes, att, owner, approach =
-         string.match(body,
-            "^([^|]*)|([^|]*)|([^|]*)|([^|]*)|([^|]*)|([^|]*)|([^|]*)|([^|]*)$")
-      if not st then
-         -- aeltere Servermodule ohne die beiden neuen Felder
-         st, dist, target, mounted, nodes, att =
-            string.match(body, "^([^|]*)|([^|]*)|([^|]*)|([^|]*)|([^|]*)|([^|]*)$")
-      end
+      local st, dist, target, mounted, nodes, att =
+         string.match(body, "^([^|]*)|([^|]*)|([^|]*)|([^|]*)|([^|]*)|([^|]*)$")
       if st then
-         AT.status.owner    = owner or "TRAVEL"
-         AT.status.approach = tonumber(approach) or 0
          AT.status.state    = st
          AT.status.distance = tonumber(dist) or 0
          AT.status.target   = target
@@ -497,18 +464,12 @@ local function Help()
       "/at koords            Weltkoordinaten des Ziels anzeigen",
       "/at diag              Diagnose: warum scheitert der Pfad?",
       "/at knoten            Zustand des Playerbot-Knotengraphen",
-      "/at route <profil>    korridor | kurz | schnell | sicher | zufuss",
       "/at route             Stuetzpunkte der Carbonite-Route anzeigen",
       "/at profil            Profil wechseln (ohne Argument: Liste)",
       "/at bot               Playerbot-Steuerung an/aus",
       "/at erbstuecke        geschuetzte Erbstuecke anzeigen",
-      "/at erbstuecke neu    aktuelle Ausruestung als Sollzustand nehmen",
-      "/at erbstuecke test   welche Anlegewege kennt der Client?",
       "/at botan | botaus    Selbstmodus von Hand schalten",
       "/at profile           eigene Profile bearbeiten",
-      "/at pause             ausdrueckliche Pause (laeuft nicht von selbst ab)",
-      "/at weiter            Pause beenden",
-      "/at kontrolle         Steuerungsuebernahme waehrend der Fahrt",
       "/at selfon <befehl>   Befehl zum Einschalten des Selbstmodus",
       "/at selfoff <befehl>  Befehl zum Ausschalten",
       "/at karte <id>        WorldMapArea-ID erzwingen (0 = automatisch)",
@@ -563,33 +524,12 @@ SlashCmdList["AUTOTRAVEL"] = function(input)
 
    elseif cmd == "erbstuecke" or cmd == "heirloom" then
       if rest == "" then
+         AT.Gear.Snapshot(true)
          AT.Gear.Report()
-      elseif rest == "neu" then
-         AT.Gear.Snapshot()
-         AT.Print("Erbstuecke neu erfasst.")
-         AT.Gear.Report()
-      elseif rest == "test" then
-         AT.Gear.Probe()
       else
          AT.Set("GuardHeirlooms", AT.GetBool("GuardHeirlooms") and 0 or 1)
          AT.Print("Erbstueckschutz " .. (AT.GetBool("GuardHeirlooms") and "AN" or "AUS"))
       end
-
-   elseif cmd == "pause" then AT.Human.ManualPause()
-   elseif cmd == "weiter" or cmd == "resume" then AT.Human.Resume()
-
-   elseif cmd == "route" and rest ~= "" then
-      Send("at set profil " .. string.lower(rest))
-      AT.Set("RouteProfile", string.lower(rest))
-
-   elseif cmd == "kontrolle" then
-      AT.Set("TakeControl", AT.GetBool("TakeControl") and 0 or 1)
-      Send("at set control " .. (AT.GetBool("TakeControl") and "1" or "0"))
-   Send("at set profil " .. tostring(AT.Get("RouteProfile") or "korridor"))
-      AT.Print("Steuerungsuebernahme " .. (AT.GetBool("TakeControl") and "AN" or "AUS") ..
-               (AT.GetBool("TakeControl")
-                and " - zuverlaessigere Bewegung, aber du kannst waehrend der Fahrt nichts tun."
-                or  " - du behaeltst die Kontrolle, die Bewegung kann abbrechen."))
 
    elseif cmd == "botan" then AT.Bot.Enable()
    elseif cmd == "botaus" then AT.Bot.Disable()
@@ -680,9 +620,3 @@ SlashCmdList["AUTOTRAVEL"] = function(input)
 
    else Help() end
 end
-
--- Beschriftungen fuer die Tastenbelegung (Spiel -> Tastatur -> AutoTravel)
-BINDING_HEADER_AUTOTRAVEL       = "AutoTravel"
-BINDING_NAME_AUTOTRAVEL_PAUSE   = "Spielervorrang ein/aus"
-BINDING_NAME_AUTOTRAVEL_TOGGLE  = "Reise starten / stoppen"
-BINDING_NAME_AUTOTRAVEL_BOT     = "Playerbot ein/aus"

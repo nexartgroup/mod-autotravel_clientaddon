@@ -29,7 +29,6 @@ local STATE = {
    ["MOUNTING"]        = { "|cffe8c44a", "Mountet",           0.91, 0.77, 0.29 },
    ["TRAVELING"]       = { "|cff53d17a", "Unterwegs",         0.33, 0.82, 0.48 },
    ["PAUSED - COMBAT"] = { "|cffe8654a", "Kampf",             0.91, 0.40, 0.29 },
-   ["PAUSED - SPIELER"]= { "|cffe8c44a", "Du hast Vorrang",   0.91, 0.77, 0.29 },
    ["WARTE AUF FLUG"]  = { "|cff58b6e8", "Wartet auf Flug",   0.35, 0.71, 0.91 },
    ["ARRIVED"]         = { "|cff53d17a", "Angekommen",        0.33, 0.82, 0.48 },
    ["FAILED"]          = { "|cffe8654a", "Fehlgeschlagen",    0.91, 0.40, 0.29 },
@@ -203,8 +202,6 @@ local function BuildPanel()
    botBtn:SetPoint("TOPLEFT", 154, -100)
    botBtn.tip = function()
       GameTooltip:AddLine("Playerbot-Selbstmodus")
-      GameTooltip:AddLine("Kontrolle: " ..
-         string.gsub(AT.Human.StatusText(), "|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""), 1, 1, 1)
       GameTooltip:AddLine("Klicken schaltet ihn ein oder aus.", 0.7, 0.7, 0.7)
       GameTooltip:AddLine("Er bleibt beim Reiseende an, solange", 0.7, 0.7, 0.7)
       GameTooltip:AddLine("in den Einstellungen nichts anderes steht.", 0.7, 0.7, 0.7)
@@ -352,9 +349,7 @@ function UI.Update()
 
    panel.dot:SetVertexColor(d[3], d[4], d[5], 1)
    panel.lState:SetText(d[1] .. d[2] .. "|r")
-   panel.lTarget:SetText("|cffdde2ea" .. tostring(s.target or "-") .. "|r" ..
-      ((s.approach and s.approach > 0)
-       and string.format("  |cffe8c44a(Umweg %d yd)|r", s.approach) or ""))
+   panel.lTarget:SetText("|cffdde2ea" .. tostring(s.target or "-") .. "|r")
 
    -- Fortschritt: von der Startentfernung herunter
    if AT.active and s.distance and s.distance > 0 then
@@ -388,8 +383,6 @@ function UI.Update()
    if panel.botBtn then
       if not AT.GetBool("BotControl") then
          panel.botBtn.label:SetText("|cff6a7080gesperrt|r")
-      elseif AT.Human and AT.Human.IsHuman() and AT.GetBool("OverridePausesBot") then
-         panel.botBtn.label:SetText("|cffe8c44aPause|r")
       else
          panel.botBtn.label:SetText("Bot " .. AT.Bot.StatusText())
       end

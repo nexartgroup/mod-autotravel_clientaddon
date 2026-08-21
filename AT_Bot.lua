@@ -48,7 +48,6 @@ B.CombatFlags = {
    { "pull",            "mit Fernkampf anpullen" },
    { "pull back",       "nach dem Pull zurueckziehen" },
    { "mark rti",        "Angreifer automatisch markieren" },
-   { "wait for attack", "vor dem Angriff warten (Zeit: 'wait for attack time 5')" },
 }
 
 B.NonCombatFlags = {
@@ -346,7 +345,6 @@ local function SendSelf(cmd, want)
 end
 
 function B.Enable(silent)
-   B.pauseReason = nil
    if not AT.GetBool("BotControl") then
       if not silent then AT.Warn("Playerbot-Steuerung ist aus (/at bot).") end
       return
@@ -361,7 +359,6 @@ function B.Enable(silent)
 end
 
 function B.Disable(silent)
-   B.pauseReason = "USER"          -- vom Menschen abgeschaltet
    if B.confirmed == false then
       B.active = false
       return
@@ -373,42 +370,6 @@ end
 
 function B.Toggle()
    if B.IsRunning() then B.Disable() else B.Enable() end
-end
-
--- ---------------------------------------------------------------------------
--- Pause fuer den Spielervorrang
--- ---------------------------------------------------------------------------
--- Pausieren heisst hier: den Selbstmodus wirklich ausschalten. Nur die
--- Strategien abzuwaehlen wuerde den Bot weiterlaufen lassen, und er koennte
--- dem Spieler weiterhin ins Handwerk pfuschen.
-
--- Wer den Bot abgeschaltet hat, entscheidet, wer ihn wieder einschalten darf.
--- Vorher war das ein einzelnes Boolean: hatte der Spieler den Bot von Hand
--- ausgeschaltet und danach eine Uebernahme stattgefunden, konnte das
--- Fortsetzen ihn ungefragt wieder anschalten.
-B.pauseReason = nil        -- nil | "HUMAN_OVERRIDE" | "USER" | "ERROR"
-
-function B.Pause(reason)
-   if not AT.GetBool("BotControl") then return end
-   if not B.IsRunning() then return end
-   B.pauseReason = reason or "HUMAN_OVERRIDE"
-   SendSelf(AT.Get("SelfOffCommand"), false)
-   B.active = false
-   AT.Debug("Bot pausiert (" .. B.pauseReason .. ").")
-end
-
--- Fortsetzen darf nur, wer auch pausiert hat.
-function B.Resume(reason)
-   if not B.pauseReason then return end
-   if reason and B.pauseReason ~= reason then
-      AT.Debug("Bot bleibt aus: pausiert durch " .. B.pauseReason ..
-               ", Anfrage von " .. tostring(reason) .. ".")
-      return
-   end
-   B.pauseReason = nil
-   if not AT.GetBool("BotControl") then return end
-   AT.Debug("Bot wird fortgesetzt.")
-   B.Enable(true)
 end
 
 function B.PrintProfiles()

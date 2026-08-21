@@ -101,19 +101,9 @@ P.LoadSlot = LoadSlot
 local function Build()
    if frame then return frame end
 
-   local outer = CreateFrame("Frame", "AutoTravelProfilePanel", UIParent)
-   outer.name = "Eigene Profile"
-   outer.parent = "AutoTravel"
-
-   local scroll = CreateFrame("ScrollFrame", "AutoTravelProfileScroll", outer,
-                              "UIPanelScrollFrameTemplate")
-   scroll:SetPoint("TOPLEFT", 4, -8)
-   scroll:SetPoint("BOTTOMRIGHT", -28, 8)
-
-   frame = CreateFrame("Frame", "AutoTravelProfileContent", scroll)
-   frame:SetWidth(600)
-   frame:SetHeight(560)
-   scroll:SetScrollChild(frame)
+   frame = CreateFrame("Frame", "AutoTravelProfilePanel", UIParent)
+   frame.name = "Eigene Profile"
+   frame.parent = "AutoTravel"
 
    local title = frame:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
    title:SetPoint("TOPLEFT", 16, -16)
@@ -124,8 +114,7 @@ local function Build()
    sub:SetWidth(560) sub:SetJustifyH("LEFT")
    sub:SetText("Drei frei belegbare Profile, kontoweit gespeichert und auf allen " ..
                "Charakteren verfuegbar. Ein Profil erscheint in der Auswahl, sobald " ..
-               "mindestens eine Strategie angehakt ist. Klassenspezifische Strategien " ..
-               "(Totems, Segen, Aspekte, Begleiter) gehoeren ins Freitextfeld.")
+               "mindestens eine Strategie angehakt ist.")
    sub:SetTextColor(0.6, 0.63, 0.68)
 
    -- Auswahl der drei Plaetze
@@ -196,11 +185,11 @@ local function Build()
    for i, f in ipairs(AT.Bot.CombatFlags) do
       local col = (i - 1) % 3
       local row = math.floor((i - 1) / 3)
-      FlagBox(frame, f[1], f[2], 16 + col * 190, -186 - row * 21, "combat")
+      FlagBox(frame, f[1], f[2], 16 + col * 190, -186 - row * 22, "combat")
    end
 
    local rows = math.ceil(#AT.Bot.CombatFlags / 3)
-   local yn = -186 - rows * 21 - 12
+   local yn = -186 - rows * 22 - 14
 
    -- Nichtkampf
    local h2 = frame:CreateFontString(nil, "ARTWORK", "GameFontNormal")
@@ -215,10 +204,10 @@ local function Build()
    for i, f in ipairs(AT.Bot.NonCombatFlags) do
       local col = (i - 1) % 3
       local row = math.floor((i - 1) / 3)
-      FlagBox(frame, f[1], f[2], 16 + col * 190, yn - 28 - row * 21, "noncombat")
+      FlagBox(frame, f[1], f[2], 16 + col * 190, yn - 28 - row * 22, "noncombat")
    end
 
-   local yr = yn - 28 - math.ceil(#AT.Bot.NonCombatFlags / 3) * 21 - 14
+   local yr = yn - 28 - math.ceil(#AT.Bot.NonCombatFlags / 3) * 22 - 16
 
    -- Freitext
    local exLbl = frame:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
@@ -245,13 +234,12 @@ local function Build()
                 "als Standard hinterlaesst. Achtung: 'new rpg' laesst den Bot questen " ..
                 "und dabei Ausruestung wechseln.")
 
-   outer.refresh = function() LoadSlot(current) end
-   outer.okay    = function() end
-   outer.cancel  = function() end
-   frame.outer   = outer
+   frame.refresh = function() LoadSlot(current) end
+   frame.okay    = function() end
+   frame.cancel  = function() end
 
    if InterfaceOptions_AddCategory then
-      InterfaceOptions_AddCategory(outer)
+      InterfaceOptions_AddCategory(frame)
    end
    return frame
 end
@@ -259,9 +247,9 @@ end
 function P.Open()
    Build()
    LoadSlot(current)
-   if InterfaceOptionsFrame_OpenToCategory and frame.outer then
-      InterfaceOptionsFrame_OpenToCategory(frame.outer)
-      InterfaceOptionsFrame_OpenToCategory(frame.outer)
+   if InterfaceOptionsFrame_OpenToCategory then
+      InterfaceOptionsFrame_OpenToCategory(frame)
+      InterfaceOptionsFrame_OpenToCategory(frame)
    end
 end
 
