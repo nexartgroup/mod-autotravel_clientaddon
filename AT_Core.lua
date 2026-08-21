@@ -32,7 +32,7 @@ AutoTravel = AutoTravel or {}
 local AT = AutoTravel
 local CB = AT.Carb
 
-AT.VERSION = "10.0"
+AT.VERSION = "10.1"
 local PREFIX = "|cff33ccffAutoTravel|r: "
 
 AT.active   = false
