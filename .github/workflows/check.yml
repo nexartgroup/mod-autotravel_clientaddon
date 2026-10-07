@@ -1,0 +1,24 @@
+name: check
+
+# luacheck, Syntaxpruefung und die Tests unter Lua 5.1 (siehe tests/check.sh).
+# Die Tests laufen gegen eine Attrappe der WoW-API und ersetzen keinen Test im Spiel.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lua 5.1 und luacheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lua5.1 luarocks
+          sudo luarocks install luacheck
+
+      - name: Pruefen
+        run: tests/check.sh
