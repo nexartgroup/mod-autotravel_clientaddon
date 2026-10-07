@@ -23,6 +23,30 @@ local M = AT.MapIds
 local byName = nil
 local built  = false
 
+-- Karte per ID einstellen und PRUEFEN, ob es geklappt hat.
+--
+-- In 3.3.5a landet SetMapByID(id) nach Blizzards eigenem Code eine Karte neben
+-- dem Erwarteten: WorldMapFrame_ToggleWindowSize ruft SetMapByID(
+-- GetCurrentMapAreaID() - 1). Das waere auch die Erklaerung fuer die um eins
+-- verschobenen Karten-IDs, die der Server aus der Position zurueckrechnen muss.
+-- Ohne Spiel laesst sich das nicht entscheiden; deshalb werden beide Werte
+-- versucht und nur das gilt, was GetCurrentMapAreaID() danach bestaetigt.
+local function SetMap(id)
+   if not SetMapByID or not GetCurrentMapAreaID or not id or id <= 0 then return false end
+   pcall(SetMapByID, id)
+   if GetCurrentMapAreaID() == id then return true end
+   pcall(SetMapByID, id - 1)
+   return GetCurrentMapAreaID() == id
+end
+M.SetMap = SetMap
+
+-- Die vorher angezeigte Karte wiederherstellen; ist das nicht moeglich, zur Zone
+-- des Charakters zurueck.
+local function RestoreMap(prev)
+   if prev and prev > 0 and SetMap(prev) then return end
+   if SetMapToCurrentZone then pcall(SetMapToCurrentZone) end
+end
+
 local function norm(s)
    if type(s) ~= "string" then return nil end
    s = string.gsub(s, "^%s*(.-)%s*$", "%1")
@@ -59,11 +83,7 @@ function M.Build(force)
    end
 
    -- Ansicht zuruecksetzen
-   if prev and prev > 0 and SetMapByID then
-      pcall(SetMapByID, prev)
-   elseif SetMapToCurrentZone then
-      pcall(SetMapToCurrentZone)
-   end
+   RestoreMap(prev)
 
    built = true
    local n = 0
@@ -110,8 +130,8 @@ function M.SelfSample()
    local id = GetCurrentMapAreaID and GetCurrentMapAreaID() or 0
    local px, py = GetPlayerMapPosition("player")
 
-   if prev and prev > 0 and prev ~= id and SetMapByID then
-      pcall(SetMapByID, prev)
+   if prev and prev > 0 and prev ~= id then
+      RestoreMap(prev)
    end
 
    if id and id > 0 and px and py and (px > 0 or py > 0) then
@@ -133,24 +153,22 @@ function M.Calibration(uiMapId)
    local prev = GetCurrentMapAreaID and GetCurrentMapAreaID() or 0
    local switched = false
 
-   if prev ~= uiMapId and SetMapByID then
-      if pcall(SetMapByID, uiMapId) then switched = true end
+   -- SetMap() prueft, ob die Karte wirklich gewechselt hat. pcall allein meldet
+   -- Erfolg, auch wenn SetMapByID die Karte gar nicht gewechselt hat; dann
+   -- lieferte GetPlayerMapPosition die Position auf der ALTEN Karte, und der
+   -- Server bekaeme eine Gegenprobe, die zu einer ganz anderen Zone gehoert.
+   if prev ~= uiMapId then
+      switched = true                  -- die Ansicht kann sich bewegt haben, auch bei Misserfolg
+      SetMap(uiMapId)
    end
 
-   -- ENTSCHEIDEND: pcall meldet Erfolg, auch wenn SetMapByID die Karte gar
-   -- nicht gewechselt hat. Ohne diese Kontrolle liefert GetPlayerMapPosition
-   -- die Position auf der ALTEN Karte, und der Server bekommt eine
-   -- Gegenprobe, die zu einer ganz anderen Zone gehoert.
    local shown = GetCurrentMapAreaID and GetCurrentMapAreaID() or 0
    local px, py = 0, 0
    if shown == uiMapId then
       px, py = GetPlayerMapPosition("player")
    end
 
-   if switched then
-      if prev and prev > 0 then pcall(SetMapByID, prev)
-      elseif SetMapToCurrentZone then pcall(SetMapToCurrentZone) end
-   end
+   if switched then RestoreMap(prev) end
 
    if px and py and (px > 0 or py > 0) then return 1, px, py end
    return 0, 0, 0

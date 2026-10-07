@@ -22,18 +22,33 @@ local COL = {
    dim     = { 0.50,  0.54,  0.60,  1 },
 }
 
+-- Zustaende, wie das Servermodul sie meldet (ATStateName in AutoTravel_Config.cpp),
+-- dazu STARTING, das nur das Addon kennt: Befehl gesendet, Antwort steht aus.
+-- Eintrag: { Farbcode, Beschriftung, r, g, b }
+local YELLOW = { "|cffe8c44a", 0.91, 0.77, 0.29 }
+local GREEN  = { "|cff53d17a", 0.33, 0.82, 0.48 }
+local RED    = { "|cffe8654a", 0.91, 0.40, 0.29 }
+local BLUE   = { "|cff58b6e8", 0.35, 0.71, 0.91 }
+local GREY   = { "|cff9099a8", 0.35, 0.38, 0.44 }
+
+local function S(c, label) return { c[1], label, c[2], c[3], c[4] } end
+
 local STATE = {
-   ["IDLE"]            = { "|cff9099a8", "Bereit",            0.35, 0.38, 0.44 },
-   ["STARTING"]        = { "|cffe8c44a", "Startet",           0.91, 0.77, 0.29 },
-   ["REPATHING"]       = { "|cffe8c44a", "Berechnet neu",     0.91, 0.77, 0.29 },
-   ["MOUNTING"]        = { "|cffe8c44a", "Mountet",           0.91, 0.77, 0.29 },
-   ["TRAVELING"]       = { "|cff53d17a", "Unterwegs",         0.33, 0.82, 0.48 },
-   ["PAUSED - COMBAT"] = { "|cffe8654a", "Kampf",             0.91, 0.40, 0.29 },
-   ["WARTE AUF FLUG"]  = { "|cff58b6e8", "Wartet auf Flug",   0.35, 0.71, 0.91 },
-   ["ARRIVED"]         = { "|cff53d17a", "Angekommen",        0.33, 0.82, 0.48 },
-   ["FAILED"]          = { "|cffe8654a", "Fehlgeschlagen",    0.91, 0.40, 0.29 },
-   ["TOT"]             = { "|cffe8654a", "Tot",               0.91, 0.40, 0.29 },
+   IDLE      = S(GREY,   "Bereit"),
+   STARTING  = S(YELLOW, "Startet"),
+   REPATHING = S(YELLOW, "Berechnet neu"),
+   MOUNTING  = S(YELLOW, "Sitzt auf"),
+   TAKEOFF   = S(YELLOW, "Hebt ab"),
+   TRAVELING = S(GREEN,  "Unterwegs"),
+   COMBAT    = S(RED,    "Kampf"),
+   PLAYER    = S(YELLOW, "Du steuerst"),
+   TAXI      = S(BLUE,   "Flug"),
+   TRANSPORT = S(BLUE,   "Transport"),
+   MANUAL    = S(BLUE,   "Wartet auf Verbindung"),
+   ARRIVED   = S(GREEN,  "Angekommen"),
+   FAILED    = S(RED,    "Fehlgeschlagen"),
 }
+UI.STATE = STATE
 
 local panel, mini
 
@@ -64,6 +79,12 @@ function UI.Button(parent, w, h, label, onClick)
    b.label = fs
 
    b:SetScript("OnEnter", function()
+      if b.disabledTip and not b:IsEnabled() then
+         GameTooltip:SetOwner(b, "ANCHOR_RIGHT")
+         GameTooltip:AddLine(b.disabledTip, 0.8, 0.8, 0.8, true)
+         GameTooltip:Show()
+         return
+      end
       b:SetBackdropColor(0.19, 0.22, 0.27, 1)
       b:SetBackdropBorderColor(COL.accent[1], COL.accent[2], COL.accent[3], 1)
       if b.tip then
@@ -81,6 +102,20 @@ function UI.Button(parent, w, h, label, onClick)
    return b
 end
 
+-- Knopf sperren oder freigeben. Gesperrte Knoepfe bleiben sichtbar und erklaeren
+-- im Tooltip, warum sie gesperrt sind, statt zu verschwinden.
+function UI.SetEnabled(b, enabled, reason)
+   if not b then return end
+   b.disabledTip = reason
+   if enabled then
+      if not b:IsEnabled() then b:Enable() end
+      b:SetAlpha(1)
+   else
+      if b:IsEnabled() then b:Disable() end
+      b:SetAlpha(0.45)
+   end
+end
+
 -- ---------------------------------------------------------------------------
 -- Panel
 -- ---------------------------------------------------------------------------
@@ -90,7 +125,7 @@ local function BuildPanel()
 
    local f = CreateFrame("Frame", "AutoTravelPanel", UIParent)
    f:SetWidth(226)
-   f:SetHeight(224)
+   f:SetHeight(242)
    UI.Skin(f)
    f:SetMovable(true)
    f:EnableMouse(true)
@@ -98,13 +133,15 @@ local function BuildPanel()
    f:SetScript("OnDragStart", function() f:StartMoving() end)
    f:SetScript("OnDragStop", function()
       f:StopMovingOrSizing()
-      local p, _, _, x, y = f:GetPoint()
-      AT.Set("PanelPoint", { p, x, y })
+      local p, _, rp, x, y = f:GetPoint()
+      AT.Set("PanelPoint", { p, x, y, rp })
    end)
    f:SetClampedToScreen(true)
 
+   -- Gespeichert wird { Anker, x, y, Bezugsanker }. Aeltere Fassungen legten nur
+   -- { Anker, x, y } ab und nahmen an, dass Bezugs- und eigener Anker gleich sind.
    local p = AT.Get("PanelPoint") or { "CENTER", 240, 0 }
-   f:SetPoint(p[1] or "CENTER", UIParent, p[1] or "CENTER", p[2] or 0, p[3] or 0)
+   f:SetPoint(p[1] or "CENTER", UIParent, p[4] or p[1] or "CENTER", p[2] or 0, p[3] or 0)
 
    -- Kopfzeile
    local head = CreateFrame("Frame", nil, f)
@@ -147,9 +184,16 @@ local function BuildPanel()
    st:SetPoint("LEFT", dot, "RIGHT", 7, 0)
    f.lState = st
 
+   local leg = f:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+   leg:SetPoint("TOPRIGHT", -12, -31)
+   f.lLeg = leg
+
+   -- Feste Hoehe: ein langer Zielname wird abgeschnitten, statt in die
+   -- Fortschrittsleiste darunter umzubrechen.
    local tgt = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
    tgt:SetPoint("TOPLEFT", 12, -50)
    tgt:SetWidth(202)
+   tgt:SetHeight(12)
    tgt:SetJustifyH("LEFT")
    f.lTarget = tgt
 
@@ -175,11 +219,38 @@ local function BuildPanel()
    local info = f:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
    info:SetPoint("TOPRIGHT", -12, -82)
    f.lInfo = info
+
+   -- Eine Zeile fuer Navigationsart bzw. Uebergabe (hat Vorrang)
    local nav = f:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-   nav:SetPoint("TOPLEFT", 12, -94)
+   nav:SetPoint("TOPLEFT", 12, -96)
    nav:SetWidth(202)
+   nav:SetHeight(12)
    nav:SetJustifyH("LEFT")
    f.lNav = nav
+
+   -- Aktionen -------------------------------------------------------------
+   local go = UI.Button(f, 202, 26, "START", function() AT.Toggle() end)
+   go:SetPoint("TOPLEFT", 12, -114)
+   go.label:SetFontObject("GameFontNormal")
+   f.go = go
+
+   local pause = UI.Button(f, 99, 20, "Uebernehmen", function() AT.Handover.Toggle() end)
+   pause:SetPoint("TOPLEFT", 12, -144)
+   pause.tip = function()
+      GameTooltip:AddLine("Steuerung uebernehmen")
+      GameTooltip:AddLine("Der Autopilot haelt an und gibt dir die Kontrolle.", 0.7, 0.7, 0.7, true)
+      GameTooltip:AddLine("Nach einer Weile ohne Eingabe laeuft ein Countdown, " ..
+                          "danach faehrt er weiter. Ein ausdruecklich uebernommener " ..
+                          "Halt endet nur mit einem Klick auf 'Weiter'.", 0.6, 0.62, 0.66, true)
+      GameTooltip:AddLine(" ")
+      GameTooltip:AddLine("Auch per Taste: Optionen -> Tastaturbelegung -> AutoTravel.", 0.6, 0.62, 0.66, true)
+   end
+   f.pause = pause
+
+   local re = UI.Button(f, 99, 20, "Neu berechnen", function() AT.Repath() end)
+   re:SetPoint("TOPLEFT", 115, -144)
+   f.re = re
+
    -- Profil und Botschalter getrennt
    local prof = UI.Button(f, 138, 20, "", function()
       local pr = AT.Bot.Next()
@@ -187,15 +258,14 @@ local function BuildPanel()
       if AT.Bot.IsRunning() then AT.Bot.ApplyProfile() end
       UI.Update()
    end)
-   prof:SetPoint("TOPLEFT", 12, -118)
+   prof:SetPoint("TOPLEFT", 12, -168)
    prof.tip = function()
       GameTooltip:AddLine("Verhalten des Playerbots")
       local cur = AT.Bot.Current()
-      for _, x in ipairs(AT.Bot.Profiles) do
+      for _, x in ipairs(AT.Bot.List()) do
          if x.key == cur.key then GameTooltip:AddLine(x.name .. " - " .. x.desc, 0.33, 0.82, 0.48)
          else GameTooltip:AddLine(x.name .. " - " .. x.desc, 0.6, 0.62, 0.66) end
       end
-      GameTooltip:AddLine(" ")
       GameTooltip:AddLine(" ")
       GameTooltip:AddLine("Klicken wechselt das Profil", 0.91, 0.77, 0.29)
       GameTooltip:AddLine("Eigene Profile: /at profile", 0.6, 0.62, 0.66)
@@ -203,7 +273,7 @@ local function BuildPanel()
    f.prof = prof
 
    local botBtn = UI.Button(f, 60, 20, "", function() AT.Bot.Toggle() end)
-   botBtn:SetPoint("TOPLEFT", 154, -118)
+   botBtn:SetPoint("TOPLEFT", 154, -168)
    botBtn.tip = function()
       GameTooltip:AddLine("Playerbot-Selbstmodus")
       GameTooltip:AddLine("Klicken schaltet ihn ein oder aus.", 0.7, 0.7, 0.7)
@@ -218,7 +288,7 @@ local function BuildPanel()
       AT.Print("Erbstueckschutz " .. (AT.GetBool("GuardHeirlooms") and "AN" or "AUS"))
       UI.Update()
    end)
-   heir:SetPoint("TOPLEFT", 12, -140)
+   heir:SetPoint("TOPLEFT", 12, -192)
    heir.tip = function()
       GameTooltip:AddLine("Erbstuecke schuetzen")
       GameTooltip:AddLine("Angelegte Teile der Qualitaetsstufe 7 werden", 0.7, 0.7, 0.7)
@@ -227,22 +297,14 @@ local function BuildPanel()
    end
    f.heir = heir
 
-   -- Aktionen
-   local go = UI.Button(f, 202, 26, "START", function() AT.Toggle() end)
-   go:SetPoint("TOPLEFT", 12, -148)
-   go.label:SetFontObject("GameFontNormal")
-   f.go = go
-
-   local re = UI.Button(f, 99, 20, "Neu berechnen", function() AT.Repath() end)
-   re:SetPoint("TOPLEFT", 12, -178)
-
-   local tp = UI.Button(f, 99, 20, "|cffe8c44aTeleport|r", function() AT.Teleport() end)
-   tp:SetPoint("TOPLEFT", 115, -178)
+   local tp = UI.Button(f, 202, 20, "|cffe8c44aTeleport|r", function() AT.Teleport() end)
+   tp:SetPoint("TOPLEFT", 12, -214)
    tp.tip = function()
       GameTooltip:AddLine("Direkt zum Ziel springen")
       GameTooltip:AddLine("Nur fuer den Notfall - der normale Weg", 0.7, 0.7, 0.7)
       GameTooltip:AddLine("ist START, damit der Charakter laeuft.", 0.7, 0.7, 0.7)
    end
+   f.tp = tp
 
    panel = f
    UI.Refresh()
@@ -256,6 +318,7 @@ local function PositionMinimap()
    if not mini then return end
    local a = AT.Get("MinimapAngle") or 200
    local rad = math.rad(a)
+   mini:ClearAllPoints()
    mini:SetPoint("CENTER", Minimap, "CENTER", 78 * math.cos(rad), 78 * math.sin(rad))
 end
 
@@ -266,7 +329,7 @@ local function BuildMinimap()
    b:SetWidth(31) b:SetHeight(31)
    b:SetFrameStrata("MEDIUM")
    b:SetFrameLevel(8)
-   b:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+   b:RegisterForClicks("LeftButtonUp", "RightButtonUp", "MiddleButtonUp")
    b:RegisterForDrag("LeftButton")
    b:SetMovable(true)
 
@@ -285,20 +348,23 @@ local function BuildMinimap()
    b:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
 
    b:SetScript("OnClick", function(self, button)
-      if button == "RightButton" then AT.Teleport() else AT.Toggle() end
+      if button == "RightButton" then AT.Teleport()
+      elseif button == "MiddleButton" then AT.Handover.Toggle()
+      else AT.Toggle() end
    end)
 
    b:SetScript("OnEnter", function()
       GameTooltip:SetOwner(b, "ANCHOR_LEFT")
       GameTooltip:AddLine("AutoTravel")
       local s = AT.status
-      local d = STATE[s.state] or STATE["IDLE"]
+      local d = STATE[s.state] or STATE.IDLE
       GameTooltip:AddLine(d[2] .. "  |cffffffff" .. tostring(s.target or "-") .. "|r", 1, 1, 1)
       if AT.active and s.distance and s.distance > 0 then
          GameTooltip:AddLine(string.format("noch %d yd", s.distance), 0.7, 0.7, 0.7)
       end
       GameTooltip:AddLine(" ")
       GameTooltip:AddLine("Links: Reise starten / stoppen", 0.33, 0.82, 0.48)
+      GameTooltip:AddLine("Mitte: Steuerung uebernehmen / zurueckgeben", 0.35, 0.71, 0.91)
       GameTooltip:AddLine("Rechts: Teleport zum Ziel", 0.91, 0.77, 0.29)
       GameTooltip:AddLine("Ziehen: Knopf verschieben", 0.6, 0.6, 0.6)
       GameTooltip:Show()
@@ -340,6 +406,27 @@ function UI.RefreshMinimap()
    if AT.GetBool("MinimapButton") then mini:Show() else mini:Hide() end
 end
 
+-- Text der Navigationszeile: Uebergabe hat Vorrang vor der Navigationsart.
+local function NavLine()
+   local h = AT.Handover.StatusText()
+   if h then
+      local col = (AT.status.state == "COMBAT") and "|cffe8654a" or "|cffe8c44a"
+      return col .. h .. "|r"
+   end
+
+   local natural = AT.GetBool("NaturalPathing")
+   local contour = AT.GetBool("ContourProbing")
+
+   if natural and contour then
+      return "|cff53d17aNatuerliche Navigation|r  |cff58b6e8Contour aktiv|r"
+   elseif natural then
+      return "|cff53d17aNatuerliche Navigation|r"
+   elseif contour then
+      return "|cff58b6e8Contour aktiv|r"
+   end
+   return "|cff9099a8Normale Navigation|r"
+end
+
 function UI.Update()
    local s = AT.status
    local d = STATE[s.state] or { "|cffffffff", tostring(s.state or "?"), 0.6, 0.6, 0.6 }
@@ -355,30 +442,48 @@ function UI.Update()
    panel.lState:SetText(d[1] .. d[2] .. "|r")
    panel.lTarget:SetText("|cffdde2ea" .. tostring(s.target or "-") .. "|r")
 
-   -- Fortschritt: von der Startentfernung herunter
+   if AT.active and s.legs and s.legs > 1 then
+      panel.lLeg:SetText(string.format("Etappe %d/%d", s.leg or 0, s.legs))
+   else
+      panel.lLeg:SetText("")
+   end
+
+   -- Fortschritt kommt vom Server (Anteil der zurueckgelegten Luftlinie). Ein
+   -- aelteres Modul ohne dieses Feld meldet 0; dann wird wie frueher von der
+   -- ersten gesehenen Entfernung heruntergerechnet.
    if AT.active and s.distance and s.distance > 0 then
-      if not AT.startDistance or s.distance > AT.startDistance then
-         AT.startDistance = s.distance
+      local frac
+      if s.progress and s.progress > 0 then
+         frac = s.progress / 100
+      else
+         if not AT.startDistance or s.distance > AT.startDistance then
+            AT.startDistance = s.distance
+         end
+         frac = 1 - (s.distance / math.max(1, AT.startDistance))
       end
-      local frac = 1 - (s.distance / math.max(1, AT.startDistance))
       panel.bar:SetValue(math.max(0, math.min(1, frac)))
       panel.lDist:SetText(string.format("|cffdde2ea%d|r |cff8a90a0yd|r", s.distance))
    else
       AT.startDistance = nil
-      panel.bar:SetValue(0)
+      panel.bar:SetValue(s.state == "ARRIVED" and 1 or 0)
       panel.lDist:SetText("|cff8a90a0-|r")
    end
 
    local extra = ""
-   if s.mounted == 1 then extra = "Mount" end
-   if s.nodes and s.nodes > 0 then
-      extra = extra ~= "" and (extra .. "  ") or ""
-      extra = extra .. s.nodes .. " Nodes"
-   end
+   if s.flying then extra = "Flug"
+   elseif s.swimming then extra = "Schwimmt"
+   elseif s.mounted == 1 then extra = "Mount" end
    if s.attempts and s.attempts > 0 then
-      extra = extra .. "  Retry " .. s.attempts
+      extra = extra .. (extra ~= "" and "  " or "") .. "Retry " .. s.attempts
+   end
+   if AT.Net.state ~= "READY" and AT.Net.state ~= "UNKNOWN" then
+      local why = { HELLO = "verbindet ...", ABSENT = "kein Server", INCOMPATIBLE = "Modul zu alt",
+                    DISABLED = "Modul aus" }
+      extra = "|cffff8800" .. (why[AT.Net.state] or AT.Net.state) .. "|r"
    end
    panel.lInfo:SetText(extra)
+
+   panel.lNav:SetText(NavLine())
 
    if panel.prof then
       panel.prof.label:SetText("|cffdde2ea" .. AT.Bot.Current().name .. "|r")
@@ -394,35 +499,34 @@ function UI.Update()
 
    if panel.heir then
       if AT.GetBool("GuardHeirlooms") then
-         panel.heir.label:SetText("|cff53d17aErbstuecke geschuetzt|r  |cff8a90a0(" ..
+         -- Kurz genug fuer den 202 Pixel breiten Knopf.
+         panel.heir.label:SetText("|cff53d17aErbstuecke|r  |cff8a90a0(" ..
             (AT.GetBool("GuardAlways") and "immer" or "nur auf Reisen") .. ")|r")
       else
          panel.heir.label:SetText("|cff6a7080Erbstueckschutz aus|r")
       end
    end
 
-   if f.lNav then
-      local natural =
-         AT.GetBool("NaturalPathing")
+   panel.go.label:SetText(AT.active and "STOP" or "START")
 
-      local contour =
-         AT.GetBool("ContourProbing")
-
-      if natural and contour then
-         f.lNav:SetText(
-            "|cff53d17aNatuerliche Navigation|r  " ..
-            "|cff58b6e8Contour aktiv|r")
-      elseif natural then
-         f.lNav:SetText(
-            "|cff53d17aNatuerliche Navigation|r")
-      elseif contour then
-         f.lNav:SetText(
-            "|cff58b6e8Contour aktiv|r")
-      else
-         f.lNav:SetText(
-            "|cff9099a8Normale Navigation|r")
-      end
+   -- Uebernehmen / Weiter
+   if AT.Handover.CanResume() then
+      panel.pause.label:SetText("|cff53d17aWeiter|r")
+      UI.SetEnabled(panel.pause, true)
+   else
+      panel.pause.label:SetText("Uebernehmen")
+      local can = AT.Handover.CanPause()
+      local why
+      if not AT.active then why = "Es laeuft keine Reise."
+      elseif s.state == "COMBAT" then why = "Im Kampf hast du die Kontrolle ohnehin. Danach geht es von selbst weiter."
+      elseif not can then why = "In diesem Zustand (" .. tostring(s.state) .. ") steuert ohnehin niemand." end
+      UI.SetEnabled(panel.pause, can, why)
    end
 
-   panel.go.label:SetText(AT.active and "STOP" or "START")
+   UI.SetEnabled(panel.re, AT.active, "Es laeuft keine Reise.")
+
+   -- Teleport: nur anbieten, wenn der Server ihn diesem Spieler erlaubt.
+   local tpOk = (AT.Get("TeleportMode") == "go") or AT.Net.Can("TELEPORT")
+   UI.SetEnabled(panel.tp, tpOk,
+      "Der Teleport ist dir auf diesem Server nicht erlaubt (AutoTravel.TeleportSecurity).")
 end

@@ -1,0 +1,12 @@
+<Bindings>
+    <!-- Anzeigenamen stehen in AT_Core.lua (BINDING_HEADER_AUTOTRAVEL, BINDING_NAME_...). -->
+    <Binding name="AUTOTRAVEL_TOGGLE" header="AUTOTRAVEL" runOnUp="false">
+        AutoTravel.Toggle()
+    </Binding>
+    <Binding name="AUTOTRAVEL_PAUSE" runOnUp="false">
+        AutoTravel.Handover.Toggle()
+    </Binding>
+    <Binding name="AUTOTRAVEL_BOT" runOnUp="false">
+        AutoTravel.Bot.Toggle()
+    </Binding>
+</Bindings>

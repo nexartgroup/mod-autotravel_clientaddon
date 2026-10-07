@@ -124,7 +124,7 @@ local function CheckSlot(slot, now)
 
    if (now - (w.lastTry or 0)) < RETRY_GAP then return end
 
-   local bag, bslot, blink = FindInBags(w.id)
+   local bag, _, blink = FindInBags(w.id)
    if not bag then
       AT.Warn("Erbstueck aus Platz " .. slot .. " ist weder angelegt noch in den Taschen. " ..
               "Ueberwachung fuer diesen Platz beendet.")

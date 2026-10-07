@@ -1,45 +1,54 @@
 -- AT_Core.lua
 -- ---------------------------------------------------------------------------
--- AutoTravel 5.0  --  Client-Teil
+-- AutoTravel  --  Client-Teil
 --
 -- Aufgabenteilung:
 --
 --   Carbonite   ->  "wohin"        (Goto-Wegpunkt)
 --   Addon       ->  Ziel auslesen, in normalisierte Zonenkoordinaten wandeln,
---                   an das Servermodul schicken, Status anzeigen
+--                   an das Servermodul schicken, Status anzeigen, Uebergabe
+--                   zwischen Spieler und Autopilot bedienen
 --   mod-autotravel (Server) -> "wie": WorldMapArea.dbc, PathGenerator
---                   (Navmesh), MoveSpline, Kampfpause, Repath, Stuck, Mount
+--                   (Navmesh), MoveSpline, Kampfpause, Repath, Stuck, Mount,
+--                   Flugmeister, Transporte
 --
--- Warum diesmal serverseitig: ein 3.3.5a-Addon kann den Charakter nicht
--- bewegen (alle Bewegungsfunktionen sind protected), und der Playerbot-Befehl
--- "go" kann nur Ziele innerhalb der eigenen Zone benennen. Beides faellt weg,
--- sobald ein eigenes Servermodul mitspielt.
+-- Warum serverseitig: ein 3.3.5a-Addon kann den Charakter nicht bewegen (alle
+-- Bewegungsfunktionen sind protected), und der Playerbot-Befehl "go" kann nur
+-- Ziele innerhalb der eigenen Zone benennen.
 --
--- Protokoll (Chat, wird serverseitig abgefangen und nie gebroadcastet):
+-- Protokoll (Einzelheiten und Handschlag in AT_Net.lua):
 --
---   .at start   <uiMapId> <nx> <ny> <hasCalib> <pnx> <pny> <Name...>
---   .at tp      <uiMapId> <nx> <ny> <hasCalib> <pnx> <pny> <Name...>
---   .at resolve <uiMapId> <nx> <ny> <hasCalib> <pnx> <pny>
---   .at stop | repath | status | debug <0|1> | set arrival <n>
+--   Befehle (Chat, serverseitig abgefangen und nie gebroadcastet):
+--     .at hello
+--     .at start   <uiMapId> <nx> <ny> <hasCalib> <pnx> <pny> <curMap> <cnx> <cny> <Name...>
+--     .at route <0|1> <map:nx:ny:art> ...      .at rstart <curMap> <cnx> <cny> <Name...>
+--     .at tp | resolve | diag   <wie start>
+--     .at stop | pause | resume | repath | status | debug <0|1> | set <schluessel> <wert>
 --
--- Rueckmeldungen kommen als Systemnachricht:
---
---   [AT]S|<state>|<distanz>|<ziel>|<mount>|<nodes>|<versuche>
---   [AT]M|<Meldung>     [AT]D|<Debug>     [AT]W|<map>|<x>|<y>|<z>
+--   Rueckmeldungen (Systemnachricht):
+--     [AT]H|...   Handschlag     [AT]S|...   Status     [AT]M|<Text>   Meldung
+--     [AT]D|<Text>   Debug       [AT]W|<map>|<x>|<y>|<z>   Weltkoordinaten
 -- ---------------------------------------------------------------------------
 
 AutoTravel = AutoTravel or {}
 local AT = AutoTravel
 local CB = AT.Carb
+local N  = AT.Net
 
-AT.VERSION = "8.1"
+AT.VERSION = "11.0"
 local PREFIX = "|cff33ccffAutoTravel|r: "
+
+-- Anzeigenamen fuer Optionen -> Tastaturbelegung (siehe Bindings.xml).
+BINDING_HEADER_AUTOTRAVEL      = "AutoTravel"
+BINDING_NAME_AUTOTRAVEL_TOGGLE = "Reise starten / stoppen"
+BINDING_NAME_AUTOTRAVEL_PAUSE  = "Steuerung uebernehmen / zurueckgeben"
+BINDING_NAME_AUTOTRAVEL_BOT    = "Playerbot-Selbstmodus umschalten"
 
 AT.active   = false
 AT.lastRx   = 0
-AT.status   = { state = "IDLE", distance = 0, target = "-", mounted = 0, nodes = 0, attempts = 0 }
-
-local pendingGo = nil     -- wartet auf [AT]W fuer den .go-xyz-Modus
+AT.status   = { state = "IDLE", distance = 0, target = "-", mounted = 0, points = 0,
+                attempts = 0, leg = 0, legs = 0, progress = 0, flags = 0,
+                flying = false, swimming = false, driving = false, paused = false }
 
 local DEFAULTS = {
    HideProtocol  = 1,
@@ -49,12 +58,23 @@ local DEFAULTS = {
    TeleportMode  = "module",   -- "module" = .at tp | "go" = .go xyz ueber .at resolve
    ConfirmTp     = 1,
    Debug         = 0,
+   AutoHello     = 1,          -- beim Anmelden das Servermodul abfragen
+
+   -- Uebergabe an den Spieler
+   AutoResume       = 1,       -- nach Ruhezeit selbst zurueckgeben
+   QuietSeconds     = 8,       -- Ruhe, bevor der Countdown beginnt
+   CountdownSeconds = 3,       -- sichtbarer Countdown, den jede Eingabe abbricht
+
+   -- Zielradius. Der Server kennt seinen eigenen Standard; gemeldet wird nur,
+   -- was der Spieler selbst eingestellt hat (ArriveCustom).
+   ArriveYards   = 8,
+   ArriveCustom  = 0,
 
    -- Playerbot-Selbstmodus
    BotControl     = 1,
    Profile        = "verteidigen",
-   SelfOnCommand  = ".playerbots bot self on",
-   SelfOffCommand = ".playerbots bot self off",
+   SelfOnCommand  = ".playerbots bot self",
+   SelfOffCommand = ".playerbots bot self",
    HideBotCmd     = 1,
    ShowProtocol   = 0,
    GuardHeirlooms = 1,
@@ -65,8 +85,8 @@ local DEFAULTS = {
    -- Natuerliche Navigation
    -- ---------------------------------------------------------------
    --
-   -- Diese Werte werden an das Servermodul uebergeben.
-   -- Das Addon berechnet keine NavMesh-Wege selbst.
+   -- Diese Werte werden an das Servermodul uebergeben (nur Spielleiter, sie
+   -- gelten serverweit). Das Addon berechnet keine NavMesh-Wege selbst.
    --
    NaturalPathing           = 1,
    ContourProbing           = 1,
@@ -76,6 +96,7 @@ local DEFAULTS = {
    ContourWideOffset        = 180,
    ContourMaxDistanceFactor = 250,
 }
+AT.DEFAULTS = DEFAULTS
 
 function AT.Print(m) if DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage(PREFIX .. tostring(m or "")) end end
 function AT.Warn(m)  if DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage(PREFIX .. "|cffff8800" .. tostring(m or "") .. "|r") end end
@@ -90,17 +111,39 @@ function AT.Get(k)
 end
 function AT.Set(k, v) AutoTravelDB = AutoTravelDB or {} AutoTravelDB[k] = v end
 function AT.GetBool(k) local v = AT.Get(k) return v == 1 or v == true end
+
+-- ---------------------------------------------------------------------------
+-- Senden (Warteschlange und Handschlag: AT_Net.lua)
+-- ---------------------------------------------------------------------------
+-- Kurzformen, die auch AT_Bot und AT_Options benutzen.
+
+function AT.Send(cmd, opts)  return N.Send(cmd, opts) end
+function AT.SendNow(cmd, key) return N.SendNow(cmd, key) end
+function AT.Queue(fn, tag)   N.Queue(fn, tag) end
+
+-- Serverweite Einstellung (".at set"). Sie gilt fuer ALLE Spieler und ist
+-- deshalb Spielleitern vorbehalten. Einem normalen Spieler wuerde der Server
+-- jeden Klick mit einer Absage quittieren; das Addon fragt deshalb vorher die
+-- Berechtigung aus dem Handschlag ab und merkt sich den Wert nur lokal.
 function AT.SetServerOption(key, value)
    if value == nil then return end
 
-   AT.Set(key, value)
+   -- Der Wert selbst wird NICHT hier gespeichert: 'key' ist der Schluessel des
+   -- Servers ("natural"), nicht der der Einstellung im Addon ("NaturalPathing").
+   -- Die Oberflaeche speichert ihren Wert, bevor sie diese Funktion ruft; ein
+   -- zweites Speichern unter dem Serverschluessel legte nur Muell in die
+   -- gespeicherten Variablen.
+   if not N.Can("SETTINGS") then
+      AT.Debug("Serveroption " .. tostring(key) .. " nicht gesendet: nur fuer Spielleiter.")
+      return
+   end
 
    -- Der Server nimmt Dezimalwerte mit Punkt entgegen.
-   local v = tostring(value)
-   v = string.gsub(v, ",", ".")
+   local v = string.gsub(tostring(value), ",", ".")
 
-   Send("at set " .. tostring(key) .. " " .. v)
-
+   -- Schluessel "set:<name>": eine neue Einstellung desselben Wertes ersetzt
+   -- die noch wartende alte.
+   AT.Send("at set " .. tostring(key) .. " " .. v, { key = "set:" .. tostring(key) })
    AT.Debug("Serveroption: " .. tostring(key) .. " = " .. v)
 end
 
@@ -114,40 +157,46 @@ function AT.SetServerNumber(key, value)
    if not value then return end
    AT.SetServerOption(key, value)
 end
--- ---------------------------------------------------------------------------
--- Senden
--- ---------------------------------------------------------------------------
 
--- Serverbefehle werden leicht entzerrt gesendet. Eine Route besteht aus
--- mehreren Nachrichten, und der Client hat eine eigene Flutbremse.
-local sendQueue, lastSent = {}, 0
-local SEND_GAP = 0.35
-
-local function Send(cmd)
-   table.insert(sendQueue, cmd)
-end
-AT.Send = Send
-
--- Beliebige Sendeaktion in dieselbe Warteschlange haengen, damit
--- Serverbefehle und Fluesterbefehle sich nicht ins Gehege kommen.
-function AT.Queue(fn)
-   table.insert(sendQueue, fn)
+-- Einstellung, die nur die eigene Reise betrifft (arrival, grace). Jeder darf sie
+-- setzen; sie geht mit der Sitzung verloren und wird deshalb nach dem
+-- Handschlag erneut gemeldet.
+function AT.SetSessionOption(key, value)
+   value = tonumber(value)
+   if not value then return end
+   AT.Send("at set " .. key .. " " .. string.gsub(tostring(value), ",", "."),
+           { key = "set:" .. key })
 end
 
-local pump = CreateFrame("Frame")
-pump:SetScript("OnUpdate", function()
-   if #sendQueue == 0 then return end
+-- Kleine Verzoegerung ohne Zusatzbibliothek.
+local timers = {}
+local timerFrame = CreateFrame("Frame")
+timerFrame:SetScript("OnUpdate", function()
+   if #timers == 0 then return end
    local now = GetTime()
-   if (now - lastSent) < SEND_GAP then return end
-   local item = table.remove(sendQueue, 1)
-   lastSent = now
-   if type(item) == "function" then
-      item()
-   else
-      SendChatMessage("." .. item, "SAY")
-      AT.Debug("-> ." .. item)
+   for i = #timers, 1, -1 do
+      if now >= timers[i].at then
+         local fn = timers[i].fn
+         table.remove(timers, i)
+         fn()
+      end
    end
 end)
+function AT.After(seconds, fn) table.insert(timers, { at = GetTime() + seconds, fn = fn }) end
+
+-- Der Server hat auf den Handschlag geantwortet.
+function AT.OnServerKnown()
+   if AT.GetBool("ArriveCustom") then
+      AT.SetSessionOption("arrival", AT.Get("ArriveYards"))
+   end
+   -- Das Debugkennzeichen gilt je Sitzung des Servers und ging mit dem Abmelden
+   -- verloren; das Addon merkt es sich aber dauerhaft.
+   if AT.GetBool("Debug") then
+      AT.Send("at debug 1", { key = "debug" })
+   end
+   if AT.UI then AT.UI.Update() end
+   if AT.Options then AT.Options.Load() end
+end
 
 -- ---------------------------------------------------------------------------
 -- Ziel bestimmen
@@ -170,7 +219,7 @@ function AT.BuildTargetArgs()
       return nil, "Carbonite ist nicht geladen."
    end
 
-   local nx, ny, mapName, mapIndex, d = CB.GetDestinationNormalized()
+   local nx, ny, mapName, _, d = CB.GetDestinationNormalized()
    if not nx then return nil, ny end
 
    local uiMapId = AT.Get("ForcedMapId")
@@ -255,12 +304,15 @@ function AT.BuildRoute()
    return out
 end
 
-local function SendRoute(route)
+-- Teilt die Route in Chatnachrichten (PACK_LIMIT Zeichen) und gibt die Liste der
+-- Befehle zurueck. Ausgelagert, damit sich die Aufteilung testen laesst.
+function AT.PackRoute(route)
+   local cmds = {}
    local first = true
    local buf = ""
    local function flush()
       if buf == "" then return end
-      Send("at route " .. (first and "0" or "1") .. " " .. buf)
+      table.insert(cmds, "at route " .. (first and "0" or "1") .. " " .. buf)
       first = false
       buf = ""
    end
@@ -271,27 +323,54 @@ local function SendRoute(route)
       buf = (buf == "") and tok or (buf .. " " .. tok)
    end
    flush()
-   if first then Send("at route 0 ") end       -- leere Route ausdruecklich loeschen
+   return cmds
 end
 
 -- ---------------------------------------------------------------------------
 -- Reise
 -- ---------------------------------------------------------------------------
 
-local function Watchdog()
-   local started = GetTime()
-   local f = CreateFrame("Frame")
-   f:SetScript("OnUpdate", function()
-      if AT.lastRx > started then
-         f:SetScript("OnUpdate", nil)
-      elseif (GetTime() - started) > 4 then
-         f:SetScript("OnUpdate", nil)
-         AT.Warn("Keine Antwort vom Server. Ist das Modul mod-autotravel installiert und aktiv?")
-         AT.active = false
-         AT.status.state = "IDLE"
-         if AT.UI then AT.UI.Update() end
+-- Meldet sich der Server nach einem Start nicht, ist etwas falsch: Modul
+-- abgestuerzt, Verbindung weg, Befehl abgewiesen.
+--
+-- Ein Start gilt erst als angenommen, wenn eine STATUSzeile kommt. Eine
+-- Textmeldung ("Du bist tot.", "Zu schnell") genuegt nicht: der Server meldet so
+-- auch Absagen, und das Addon wuerde auf "Startet" haengen bleiben. Beim
+-- Teleport dagegen kommt keine Statuszeile, dort zaehlt jede Antwort.
+--
+-- Ein einziger Rahmen fuer alle Aufrufe; frueher entstand je Start ein neuer,
+-- und Rahmen werden in WoW nie freigegeben.
+local wdFrom, wdNeedStatus = nil, false
+local wdFrame = CreateFrame("Frame", "AutoTravelWatchdog")
+wdFrame:SetScript("OnUpdate", function()
+   if not wdFrom then return end
+
+   local got = wdNeedStatus and (AT.lastStatusRx or 0) or AT.lastRx
+   if got > wdFrom then
+      wdFrom = nil
+      return
+   end
+
+   if (GetTime() - wdFrom) > 8 then
+      local needStatus = wdNeedStatus
+      wdFrom = nil
+      if N.IsReady() then
+         if needStatus then
+            AT.Warn("Keine Statusmeldung vom Server auf den Start. Verbindung pruefen; " ..
+                    "'/at hello' fragt das Modul erneut ab.")
+            AT.active = false
+            AT.status.state = "IDLE"
+            if AT.UI then AT.UI.Update() end
+         else
+            AT.Warn("Keine Antwort vom Server. Verbindung pruefen; '/at hello' fragt das Modul erneut ab.")
+         end
       end
-   end)
+   end
+end)
+
+local function Watchdog(needStatus)
+   wdFrom = GetTime()
+   wdNeedStatus = needStatus and true or false
 end
 
 function AT.Start()
@@ -299,14 +378,22 @@ function AT.Start()
    local name = d and sanitize(d.name) or "Ziel"
 
    local route, rerr = AT.BuildRoute()
+   local accepted
 
    if route and #route > 1 then
       local curMap, cnx, cny = AT.MapIds.SelfSample()
-      AT.Debug(string.format("Route mit %d Stuetzpunkten, davon %d Flugpunkte.",
-               #route, (function() local n=0 for _,l in ipairs(route) do n=n+(l.flag or 0) end return n end)()))
+      local taxiLegs = 0
+      for _, l in ipairs(route) do taxiLegs = taxiLegs + (l.flag or 0) end
+      AT.Debug(string.format("Route mit %d Stuetzpunkten, davon %d Flugpunkte.", #route, taxiLegs))
+
       AT.lastRx = 0
-      SendRoute(route)
-      Send(string.format("at rstart %d %.5f %.5f %s", curMap, cnx, cny, name))
+      local cmds = AT.PackRoute(route)
+      for i = 1, #cmds do
+         accepted = AT.Send(cmds[i], { tag = "start" })
+         if not accepted then return end
+      end
+      accepted = AT.Send(string.format("at rstart %d %.5f %.5f %s", curMap, cnx, cny, name),
+                         { tag = "start" })
    else
       -- Einzelziel: Carbonite liefert nur den Endpunkt
       if not route then AT.Debug("Route nicht nutzbar (" .. tostring(rerr) .. ") - Einzelziel.") end
@@ -314,20 +401,29 @@ function AT.Start()
       if not args then AT.Warn(nameOrErr) return end
       name = nameOrErr
       AT.lastRx = 0
-      Send("at start " .. args)
+      accepted = AT.Send("at start " .. args, { tag = "start" })
    end
+
+   if not accepted then return end
 
    AT.active = true
    AT.status.state  = "STARTING"
    AT.status.target = name
+   AT.status.progress = 0
    if AT.Bot then AT.Bot.Enable() end
    if AT.Gear then AT.Gear.Start() end
    if AT.UI then AT.UI.Update() end
-   Watchdog()
+   if N.IsReady() then Watchdog(true) end
 end
 
 function AT.Stop()
-   Send("at stop")
+   -- Ein noch wartender Start (in der Warteschlange oder hinter dem Handschlag)
+   -- ist damit hinfaellig. Ohne das Verwerfen ueberholte der dringende Stop die
+   -- wartenden Startbefehle auf der Leitung: der Server bekam erst "stop" (keine
+   -- Reise, nichts zu tun) und dann den Start -- und das Addon zeigte IDLE,
+   -- waehrend der Autopilot loslief.
+   N.DropTag("start")
+   AT.SendNow("at stop", "stop")
    AT.active = false
    AT.status.state = "IDLE"
    if AT.Bot and AT.GetBool("AutoDisableBot") then AT.Bot.Disable() end
@@ -338,7 +434,7 @@ function AT.Toggle()
    if AT.active then AT.Stop() else AT.Start() end
 end
 
-function AT.Repath() Send("at repath") end
+function AT.Repath() AT.Send("at repath", { key = "repath" }) end
 
 -- ---------------------------------------------------------------------------
 -- Teleport
@@ -350,16 +446,31 @@ local function DoTeleport()
 
    AT.lastRx = 0
    if AT.Get("TeleportMode") == "go" then
-      -- Weltkoordinaten beim Modul anfragen, danach den GM-Befehl benutzen.
-      pendingGo = { name = nameOrErr, at = GetTime() }
-      Send("at resolve " .. args)
+      -- Weltkoordinaten beim Modul anfragen, danach den GM-Befehl benutzen. Das
+      -- Zeitfenster fuer die Antwort wird erst geoeffnet, wenn die Anfrage
+      -- tatsaechlich angenommen wurde.
+      if AT.Send("at resolve " .. args) then N.SetPendingGo(nameOrErr) end
    else
-      Send("at tp " .. args)
+      AT.Send("at tp " .. args)
    end
-   Watchdog()
+   if N.IsReady() then Watchdog(false) end
 end
 
 function AT.Teleport()
+   -- Der Handschlag verraet, ob der Server diesem Spieler den Teleport erlaubt.
+   -- Ohne die Abfrage laeuft ein Klick ins Leere und endet in einer Absage.
+   if AT.Get("TeleportMode") ~= "go" and not N.Can("TELEPORT") then
+      if N.state ~= "READY" and N.state ~= "UNKNOWN" and N.state ~= "HELLO" then
+         -- Gesperrt, weil das Modul nicht antwortet -- nicht wegen der Rechte.
+         AT.Warn("Keine Verbindung zum Servermodul. '/at hello' fragt es erneut ab.")
+      else
+         AT.Warn("Der Teleport ist dir auf diesem Server nicht erlaubt " ..
+                 "(Stufe " .. tostring(AT.server.sec) .. "). Ein Spielleiter kann ihn mit " ..
+                 "AutoTravel.TeleportSecurity freigeben.")
+      end
+      return
+   end
+
    if not AT.GetBool("ConfirmTp") then DoTeleport() return end
 
    local args, nameOrErr = AT.BuildTargetArgs()
@@ -370,8 +481,8 @@ end
 
 StaticPopupDialogs["AUTOTRAVEL_TP_CONFIRM"] = {
    text = "Zum Carbonite-Ziel teleportieren?\n\n|cffffffff%s|r",
-   button1 = JA or YES or "Ja",
-   button2 = NEIN or NO or "Nein",
+   button1 = YES or "Ja",
+   button2 = NO or "Nein",
    OnAccept = function() DoTeleport() end,
    timeout = 20,
    whileDead = false,
@@ -380,54 +491,51 @@ StaticPopupDialogs["AUTOTRAVEL_TP_CONFIRM"] = {
 }
 
 -- ---------------------------------------------------------------------------
--- Empfang
+-- Diagnose
 -- ---------------------------------------------------------------------------
 
-local function HandleProtocol(msg)
-   AT.lastRx = GetTime()
-   local kind = string.sub(msg, 5, 5)
-   local body = string.sub(msg, 7)
+local CAP_LABELS = {
+   { "HANDOVER", "Uebergabe" }, { "ROUTE", "Route" }, { "TAXI", "Flugmeister" },
+   { "TRANSPORT", "Transporte" }, { "TELEPORT", "Teleport" }, { "SETTINGS", "Serveroptionen" },
+}
 
-   if kind == "S" then
-      local st, dist, target, mounted, nodes, att =
-         string.match(body, "^([^|]*)|([^|]*)|([^|]*)|([^|]*)|([^|]*)|([^|]*)$")
-      if st then
-         AT.status.state    = st
-         AT.status.distance = tonumber(dist) or 0
-         AT.status.target   = target
-         AT.status.mounted  = tonumber(mounted) or 0
-         AT.status.nodes    = tonumber(nodes) or 0
-         AT.status.attempts = tonumber(att) or 0
-         local wasActive = AT.active
-         AT.active = (st ~= "IDLE" and st ~= "ARRIVED" and st ~= "FAILED")
-         -- Reise ist serverseitig zu Ende (Ziel erreicht, Abbruch, Fehler):
-         -- Selbstmodus wieder abschalten.
-         if wasActive and not AT.active then
-            if AT.Bot and AT.GetBool("AutoDisableBot") then AT.Bot.Disable() end
-         end
-         if AT.UI then AT.UI.Update() end
+function AT.PrintInfo()
+   local s = AT.server
+   AT.Print("Addon " .. AT.VERSION .. "  |  Protokoll " .. N.PROTOCOL ..
+            " (akzeptiert ab " .. N.MIN_PROTOCOL .. ")")
+
+   local stateText = {
+      UNKNOWN = "noch nicht abgefragt", HELLO = "Anfrage laeuft", READY = "verbunden",
+      ABSENT = "keine Antwort", INCOMPATIBLE = "Modul zu alt", DISABLED = "serverseitig aus",
+   }
+   AT.Print("Servermodul: " .. (stateText[N.state] or N.state))
+
+   if s.known then
+      AT.Print(string.format("   Version %s, Protokoll %d, %d Reiseknoten, Kontostufe %d",
+               s.version, s.proto, s.nodes, s.sec))
+      local caps = {}
+      for _, c in ipairs(CAP_LABELS) do
+         table.insert(caps, (N.Can(c[1]) and "|cff53d17a+" or "|cff9099a8-") .. c[2] .. "|r")
       end
-
-   elseif kind == "M" then
-      AT.Print(body)
-
-   elseif kind == "D" then
-      AT.Debug(body)
-
-   elseif kind == "W" then
-      local m, x, y, z = string.match(body, "^([^|]*)|([^|]*)|([^|]*)|([^|]*)$")
-      x, y, z = tonumber(x), tonumber(y), tonumber(z)
-      if not x then return end
-      if pendingGo and (GetTime() - pendingGo.at) < 8 then
-         local name = pendingGo.name
-         pendingGo = nil
-         SendChatMessage(string.format(".go xyz %.3f %.3f %.3f %s", x, y, z, tostring(m)), "SAY")
-         AT.Print(string.format("Teleport per .go xyz zu %s (%.1f / %.1f / %.1f).", name, x, y, z))
-      else
-         AT.Print(string.format("Weltkoordinaten: %.2f / %.2f / %.2f (Map %s)", x, y, z, tostring(m)))
+      AT.Print("   " .. table.concat(caps, "  "))
+      if not s.capsKnown then
+         AT.Print("   (aelteres Modul: Faehigkeiten unbekannt, alle Knoepfe bleiben frei)")
       end
    end
+
+   AT.Print("Carbonite: " .. (CB.IsAvailable() and "gefunden" or "|cffff8800nicht gefunden|r") ..
+            "  |  Kartentabelle: " .. AT.MapIds.Count() .. " Zonen")
+   AT.Print(string.format("Uebergabe: automatisch %s, Ruhe %ds, Countdown %ds",
+            AT.GetBool("AutoResume") and "an" or "aus",
+            tonumber(AT.Get("QuietSeconds")) or 8, tonumber(AT.Get("CountdownSeconds")) or 3))
+   if AT.Bot then
+      AT.Print("Playerbot-Selbstmodus: " .. AT.Bot.StatusText() .. "  |  Profil: " .. AT.Bot.Current().name)
+   end
 end
+
+-- ---------------------------------------------------------------------------
+-- Ereignisse
+-- ---------------------------------------------------------------------------
 
 local ev = CreateFrame("Frame")
 ev:RegisterEvent("ADDON_LOADED")
@@ -438,6 +546,15 @@ ev:SetScript("OnEvent", function(self, event, arg1)
       for k, v in pairs(DEFAULTS) do
          if AutoTravelDB[k] == nil then AutoTravelDB[k] = v end
       end
+
+      -- Fruehere Fassungen lieferten andere Standardbefehle. Hat der Spieler sie
+      -- nie angefasst, auf die heutigen umstellen; eigene Eingaben bleiben.
+      if AutoTravelDB.SelfOnCommand == ".playerbots bot self on" then
+         AutoTravelDB.SelfOnCommand = DEFAULTS.SelfOnCommand
+      end
+      if AutoTravelDB.SelfOffCommand == ".playerbots bot self off" then
+         AutoTravelDB.SelfOffCommand = DEFAULTS.SelfOffCommand
+      end
    elseif event == "PLAYER_LOGIN" then
       if AT.UI then AT.UI.Build() end
       if AT.Options then AT.Options.Init() end
@@ -447,33 +564,17 @@ ev:SetScript("OnEvent", function(self, event, arg1)
       if not CB.IsAvailable() then
          AT.Warn("Carbonite nicht gefunden - AutoTravel braucht es als Zielquelle.")
       end
+
+      -- Handschlag mit kleiner Verzoegerung: unmittelbar nach dem Login ist der
+      -- Chat noch nicht zuverlaessig bereit.
+      if AT.GetBool("AutoHello") then
+         -- Nur, wenn bis dahin keiner lief: ein frueher Start hat den Handschlag
+         -- womoeglich schon erledigt, und ein zweiter wuerfe den Zustand auf HELLO
+         -- zurueck, solange die Antwort aussteht.
+         AT.After(2.5, function() if N.state == "UNKNOWN" then N.Hello() end end)
+      end
    end
 end)
-
-local chat = CreateFrame("Frame")
-chat:RegisterEvent("CHAT_MSG_SYSTEM")
-chat:RegisterEvent("CHAT_MSG_WHISPER")
-chat:SetScript("OnEvent", function(self, event, msg)
-   if type(msg) ~= "string" then return end
-   if string.sub(msg, 1, 4) == "[AT]" then
-      HandleProtocol(msg)
-      return
-   end
-   -- "Enable player botAI" / "Disable player botAI"
-   if AT.Bot and AT.Bot.OnSystemMessage(msg) then return end
-end)
-
-local function Filter(a1, a2, a3)
-   local msg
-   if type(a1) == "string" then msg = a2 else msg = a3 end
-   if type(msg) == "string" and string.sub(msg, 1, 4) == "[AT]" then
-      return AT.GetBool("HideProtocol")
-   end
-   return false
-end
-if ChatFrame_AddMessageEventFilter then
-   ChatFrame_AddMessageEventFilter("CHAT_MSG_SYSTEM", Filter)
-end
 
 -- Eigene Botbefehle nicht im Chat anzeigen (das Echo "An Dich selbst: co +dps")
 local function BotCmdFilter(a1, a2, a3)
@@ -498,6 +599,9 @@ local function Help()
       "/at                   Reise Start / Stop",
       "/at tp                zum Ziel teleportieren",
       "/at start | stop | status | repath",
+      "/at pause | weiter    Steuerung uebernehmen / zurueckgeben",
+      "/at info              Version, Verbindung, Faehigkeiten",
+      "/at hello             Servermodul erneut abfragen",
       "/at target            erkanntes Ziel pruefen",
       "/at koords            Weltkoordinaten des Ziels anzeigen",
       "/at diag              Diagnose: warum scheitert der Pfad?",
@@ -515,6 +619,7 @@ local function Help()
       "/at tpmodus <modul|go>  Teleportweg waehlen",
       "/at nachfrage         Sicherheitsabfrage vor Teleport an/aus",
       "/at ziel <n>          Zielradius in Yards",
+      "/at ruhe <s>          Ruhezeit bis zur Uebernahme (Sekunden)",
       "/at knopf             Minimap-Knopf an/aus",
       "/at panel             Fenster an/aus",
       "/at optionen          Einstellungsseite oeffnen",
@@ -535,8 +640,20 @@ SlashCmdList["AUTOTRAVEL"] = function(input)
    elseif cmd == "start" then AT.Start()
    elseif cmd == "stop" then AT.Stop()
    elseif cmd == "repath" then AT.Repath()
-   elseif cmd == "status" then Send("at status")
+   elseif cmd == "status" then AT.Send("at status", { key = "status" })
    elseif cmd == "tp" or cmd == "teleport" then AT.Teleport()
+   elseif cmd == "pause" then
+      if not AT.Handover.Pause() then AT.Print("Gerade nicht moeglich.") end
+   elseif cmd == "weiter" or cmd == "resume" then
+      if not AT.Handover.Resume() then AT.Print("Gerade nicht moeglich.") end
+   elseif cmd == "info" or cmd == "version" then AT.PrintInfo()
+   elseif cmd == "hello" then
+      if N.state == "HELLO" then AT.Print("Anfrage laeuft bereits.")
+      else
+         N.state = "UNKNOWN"
+         N.Hello()
+         AT.Print("Servermodul wird abgefragt ...")
+      end
 
    elseif cmd == "target" then
       local args, nameOrErr = AT.BuildTargetArgs()
@@ -548,8 +665,9 @@ SlashCmdList["AUTOTRAVEL"] = function(input)
          AT.Bot.PrintProfiles()
       else
          local found
-         for _, p in ipairs(AT.Bot.Profiles) do
-            if string.lower(p.name) == rest or p.key == rest then found = p end
+         local want = string.lower(rest)
+         for _, p in ipairs(AT.Bot.List()) do
+            if string.lower(p.name) == want or p.key == want then found = p end
          end
          if not found then AT.Warn("Unbekanntes Profil.") AT.Bot.PrintProfiles()
          else
@@ -571,9 +689,6 @@ SlashCmdList["AUTOTRAVEL"] = function(input)
 
    elseif cmd == "botan" then AT.Bot.Enable()
    elseif cmd == "botaus" then AT.Bot.Disable()
-
-   elseif cmd == "profile" then
-      AT.ProfileEditor.Open()
 
    elseif cmd == "bot" then
       if rest == "status" then
@@ -607,15 +722,15 @@ SlashCmdList["AUTOTRAVEL"] = function(input)
       end
 
    elseif cmd == "nodes" or cmd == "knoten" then
-      Send("at nodes")
+      AT.Send("at nodes", { key = "nodes" })
 
    elseif cmd == "diag" then
       local args, err = AT.BuildTargetArgs()
-      if not args then AT.Warn(err) else Send("at diag " .. args) end
+      if not args then AT.Warn(err) else AT.Send("at diag " .. args, { key = "diag" }) end
 
    elseif cmd == "koords" then
       local args, err = AT.BuildTargetArgs()
-      if not args then AT.Warn(err) else Send("at resolve " .. args) end
+      if not args then AT.Warn(err) else AT.Send("at resolve " .. args, { key = "resolve" }) end
 
    elseif cmd == "karte" then
       local id = tonumber(rest)
@@ -638,7 +753,24 @@ SlashCmdList["AUTOTRAVEL"] = function(input)
 
    elseif cmd == "ziel" then
       local n = tonumber(rest)
-      if n then Send("at set arrival " .. n) else AT.Print("Verwendung: /at ziel <yards>") end
+      if n and n >= 1 and n <= 100 then
+         AT.Set("ArriveYards", n)
+         AT.Set("ArriveCustom", 1)
+         AT.SetSessionOption("arrival", n)
+         if AT.Options then AT.Options.Load() end
+      else
+         AT.Print("Verwendung: /at ziel <yards>  (1 bis 100)")
+      end
+
+   elseif cmd == "ruhe" then
+      local n = tonumber(rest)
+      if n and n >= 2 and n <= 60 then
+         AT.Set("QuietSeconds", n)
+         AT.Print("Ruhezeit bis zur Uebernahme: " .. n .. " s")
+         if AT.Options then AT.Options.Load() end
+      else
+         AT.Print("Verwendung: /at ruhe <sekunden>  (2 bis 60)")
+      end
 
    elseif cmd == "knopf" then
       AT.Set("MinimapButton", AT.GetBool("MinimapButton") and 0 or 1)
@@ -653,7 +785,7 @@ SlashCmdList["AUTOTRAVEL"] = function(input)
 
    elseif cmd == "debug" then
       AT.Set("Debug", AT.GetBool("Debug") and 0 or 1)
-      Send("at debug " .. (AT.GetBool("Debug") and "1" or "0"))
+      AT.Send("at debug " .. (AT.GetBool("Debug") and "1" or "0"), { key = "debug" })
       AT.Print("Debug " .. (AT.GetBool("Debug") and "AN" or "AUS"))
 
    else Help() end
