@@ -6,8 +6,9 @@
 --   AutoTravel  bewegt den Charakter (Servermodul, NavMesh)
 --   Playerbot   kaempft, heilt, lootet
 --
--- Gesendet werden ausschliesslich Strategiebefehle (co / nc / ll). Nie "e",
--- "ue", "roll", "s", "b", "talents", "destroy". Die Strategie "new rpg" wird
+-- Gesendet werden Strategiebefehle (co / nc / ll). Nie "ue", "roll", "s", "b",
+-- "talents", "destroy". Einzige Ausnahme ist "e <Erbstueck>" aus AT_Gear.lua, das
+-- ein vom Bot abgelegtes Erbstueck wieder anlegt. Die Strategie "new rpg" wird
 -- in den festen Profilen aktiv abgeschaltet, weil sie Questen ausloest und
 -- darueber Ausruestung wechseln kann.
 --
@@ -104,8 +105,11 @@ B.Builtin = {
       key = "plus", name = "Plus",
       desc = "Wehrt sich, pluendert Gegner, sammelt Beruferessourcen.",
       combat    = "+dps,+assist,+aoe,+avoid aoe,+heal,-grind",
-      noncombat = "+loot,-grind,-new rpg,-follow,+food",
-      extra = { "ll normal", "ll skill" },
+      -- "ll" kennt nur all/*, gray/g und disenchant; jeder andere Wert (auch
+      -- "skill") wird zu "normal" (LootStrategyValue::instance). Ressourcen
+      -- sammelt die nc-Strategie "gather".
+      noncombat = "+loot,+gather,-grind,-new rpg,-follow,+food",
+      extra = { "ll normal" },
       loot = true, grace = 7.0,
    },
 }
@@ -137,8 +141,8 @@ end
 function B.CustomUsed(i)
    local c = B.Global().custom[i]
    if not c then return false end
-   for _ in pairs(c.combat or {}) do return true end
-   for _ in pairs(c.noncombat or {}) do return true end
+   if next(c.combat or {}) ~= nil then return true end
+   if next(c.noncombat or {}) ~= nil then return true end
    return (c.extra or "") ~= ""
 end
 
@@ -165,8 +169,9 @@ function B.List()
    end
    return out
 end
-B.Profiles = setmetatable({}, { __index = function(_, k) return B.List()[k] end,
-                                __len = function() return #B.List() end })
+-- Hinweis: hier stand frueher ein Proxy "B.Profiles" mit __index/__len. ipairs()
+-- beachtet beides in Lua 5.1 nicht und lief deshalb nullmal; Aufrufer nehmen
+-- B.List().
 
 function B.Find(key)
    for _, p in ipairs(B.List()) do
@@ -198,14 +203,25 @@ end
 -- ---------------------------------------------------------------------------
 
 local recent = {}
+local recentCount = 0
+
+local function PruneRecent(now)
+   for k, t in pairs(recent) do
+      if (now - t) > 60 then recent[k] = nil end
+   end
+   recentCount = 0
+end
 
 function B.Whisper(text)
    if not text or text == "" then return end
-   recent[text] = GetTime()
+   local now = GetTime()
+   recentCount = recentCount + 1
+   if recentCount > 40 then PruneRecent(now) end   -- sonst waechst die Tabelle ohne Grenze
+   recent[text] = now
    AT.Queue(function()
       SendChatMessage(text, "WHISPER", nil, UnitName("player"))
       AT.Debug("-> [Fluestern an sich] " .. text)
-   end)
+   end, "bot")
 end
 
 function B.IsOwnCommand(msg)
@@ -234,8 +250,56 @@ end
 B.active    = false
 B.confirmed = nil
 
-local ENABLE_PATTERNS  = { "enable player botai", "playerbot ai enabled", "botai aktiviert" }
-local DISABLE_PATTERNS = { "disable player botai", "playerbot ai disabled", "botai deaktiviert" }
+-- Zustand der Rueckmeldeueberwachung. Muss VOR OnSystemMessage stehen: ein Local,
+-- das erst weiter unten deklariert wird, ist fuer eine frueher definierte
+-- Funktion unsichtbar -- sie griffe auf eine globale Variable gleichen Namens
+-- zu (und fand nil).
+local watchUntil, watchWant = 0, nil
+
+-- Die Meldungen von mod-playerbots haben sich geaendert. Heute (PlayerbotMgr.cpp,
+-- Befehl "self"):
+--     "SelfBot is now active."                       eingeschaltet
+--     "SelfBot is now deactivated."                  ausgeschaltet
+--     "SelfBot is disabled server-wide."             AiPlayerbot.SelfBotLevel = 0
+--     "SelfBot is restricted for this account."      SelfBotLevel = 1, kein Spielleiter
+-- Aeltere Staende meldeten "Enable/Disable player botAI". Beide Fassungen werden
+-- erkannt.
+local ENABLE_PATTERNS  = { "selfbot is now active", "enable player botai",
+                           "playerbot ai enabled", "botai aktiviert" }
+local DISABLE_PATTERNS = { "selfbot is now deactivated", "disable player botai",
+                           "playerbot ai disabled", "botai deaktiviert" }
+local REFUSE_PATTERNS  = { "selfbot is disabled server-wide",
+                           "selfbot is restricted for this account",
+                           "playerbot system is currently disabled",   -- AiPlayerbot.Enabled = 0
+                           "you cannot control bots yet" }             -- noch kein Bot-Verwalter
+
+-- ".playerbots bot self" ist ein Umschalter: derselbe Befehl schaltet ein und aus.
+-- Ist der Zustand unbekannt (nach /reload, oder der Server hat den Selbstmodus beim
+-- Anmelden selbst eingeschaltet), kehrt ein "Einschalten" ihn um. Kommt innerhalb
+-- der Wartezeit die Bestaetigung des GEGENTEILS, wird einmal erneut umgeschaltet.
+-- Die Strategiebefehle, die hinter dem ersten Umschalter standen, gingen an einen
+-- Bot, der gar nicht lief, und werden nach dem Erfolg neu gesendet.
+local watchRetried = false
+local SendSelf          -- unten definiert; hier nur vorab bekannt gemacht
+
+local function Reconcile()
+   if watchUntil == 0 or watchWant == nil then return end
+   if B.confirmed == watchWant then
+      watchUntil = 0
+      if watchRetried and watchWant then B.ApplyProfile() end
+      return
+   end
+   if watchRetried then
+      watchUntil = 0
+      AT.Warn("Der Selbstmodus liess sich nicht in den gewuenschten Zustand bringen. " ..
+              "Er ist " .. (B.confirmed and "an" or "aus") .. ".")
+      return
+   end
+   watchRetried = true
+   AT.Net.DropTag("bot")
+   AT.Debug("Selbstmodus war nicht im erwarteten Zustand - schalte noch einmal um.")
+   SendSelf(AT.Get(watchWant and "SelfOnCommand" or "SelfOffCommand"), watchWant, true)
+end
 
 local function MatchAny(low, list)
    for _, pat in ipairs(list) do
@@ -248,10 +312,26 @@ function B.OnSystemMessage(msg)
    if type(msg) ~= "string" then return false end
    local low = string.lower(msg)
 
+   if MatchAny(low, REFUSE_PATTERNS) then
+      -- Der Server verweigert den Selbstmodus. Das ist keine Fehlbedienung: die
+      -- Rueckmeldung erklaert, warum, und die Ueberwachung muss Ruhe geben.
+      B.confirmed = false
+      B.active = false
+      B.refused = msg
+      watchUntil = 0
+      -- Die Strategiebefehle hinter dem Umschalter sind sinnlos geworden.
+      AT.Net.DropTag("bot")
+      AT.Warn("Der Server verweigert den Playerbot-Selbstmodus: " .. msg ..
+              " (AiPlayerbot.SelfBotLevel in der Serverkonfiguration)")
+      if AT.UI then AT.UI.Update() end
+      return true
+   end
+
    if MatchAny(low, ENABLE_PATTERNS) then
       B.confirmed = true
       B.active = true
       AT.Debug("Selbstmodus vom Server bestaetigt: aktiv")
+      Reconcile()
       if AT.UI then AT.UI.Update() end
       return true
    end
@@ -259,6 +339,7 @@ function B.OnSystemMessage(msg)
       B.confirmed = false
       B.active = false
       AT.Debug("Selbstmodus vom Server bestaetigt: aus")
+      Reconcile()
       if AT.UI then AT.UI.Update() end
       return true
    end
@@ -271,6 +352,7 @@ function B.IsRunning()
 end
 
 function B.StatusText()
+   if B.refused then return "|cffe8654averweigert|r" end
    if B.confirmed == true  then return "|cff53d17aaktiv|r" end
    if B.confirmed == false then return "|cff9099a8aus|r" end
    return "|cffe8c44a?|r"
@@ -316,7 +398,8 @@ function B.ApplyProfile()
       end
    end
 
-   AT.Send(string.format("at set grace %.1f", p.grace or 2.0))
+   -- Wartezeit nach dem Kampf: gilt nur fuer die eigene Sitzung des Servermoduls.
+   AT.SetSessionOption("grace", p.grace or 2.0)
    AT.Print("Profil: |cffffffff" .. p.name .. "|r - " .. p.desc)
 end
 
@@ -325,7 +408,6 @@ end
 -- ---------------------------------------------------------------------------
 
 local watchdog = CreateFrame("Frame")
-local watchUntil, watchWant = 0, nil
 
 watchdog:SetScript("OnUpdate", function()
    if watchUntil == 0 then return end
@@ -337,9 +419,12 @@ watchdog:SetScript("OnUpdate", function()
    AT.Warn("Schreibweise mit '.playerbots help' pruefen, dann /at selfon <befehl>.")
 end)
 
-local function SendSelf(cmd, want)
+function SendSelf(cmd, want, isRetry)
    if not cmd or AT.trim(cmd) == "" then return end
-   AT.Send(string.sub(cmd, 1, 1) == "." and string.sub(cmd, 2) or cmd)
+   -- Kein Befehl des Servermoduls, also ohne dessen Handschlag senden.
+   AT.Send(string.sub(cmd, 1, 1) == "." and string.sub(cmd, 2) or cmd, { raw = true })
+   B.refused = nil
+   if not isRetry then watchRetried = false end
    watchWant = want
    watchUntil = GetTime() + 6
 end

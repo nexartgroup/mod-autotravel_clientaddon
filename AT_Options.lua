@@ -3,15 +3,27 @@
 -- Einstellungsseite unter Interface -> AddOns -> AutoTravel.
 --
 -- Alles, was hier steht, laesst sich auch per Slash-Befehl setzen; die Seite
--- ist nur die bequeme Variante. Werte, die das Servermodul betreffen
--- (Zielradius), werden beim Aendern sofort dorthin gemeldet.
+-- ist nur die bequeme Variante.
+--
+-- Zwei Dinge, die frueher falsch waren:
+--
+--   * Die Seite reichte weit ueber den sichtbaren Bereich des Optionsfensters
+--     hinaus (rund 600 Pixel hoch); alles ab "Teleport" war weder sichtbar noch
+--     anklickbar. Jetzt liegt sie in einem ScrollFrame, und die Zeilen werden
+--     fortlaufend gezaehlt statt von Hand mit y-Werten belegt.
+--
+--   * Die Einstellungen zur Navigation gelten fuer den ganzen SERVER, nicht fuer
+--     den einzelnen Spieler. Ein normaler Spieler bekam bei jedem Klick eine
+--     Absage vom Server. Jetzt sind sie fuer ihn gesperrt und sagen warum.
 -- ---------------------------------------------------------------------------
 
 local AT = AutoTravel
 AT.Options = {}
 local O = AT.Options
 
-local frame
+local frame, content, gateNote
+
+local WIDTH = 580
 
 -- ---------------------------------------------------------------------------
 -- Bausteine
@@ -27,14 +39,14 @@ local function Header(parent, text, x, y)
    line:SetTexture("Interface\\Buttons\\WHITE8X8")
    line:SetVertexColor(0.25, 0.28, 0.33, 0.8)
    line:SetPoint("TOPLEFT", x, y - 18)
-   line:SetWidth(560) line:SetHeight(1)
+   line:SetWidth(WIDTH - x) line:SetHeight(1)
    return fs
 end
 
 local function Note(parent, text, x, y, width)
    local fs = parent:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
    fs:SetPoint("TOPLEFT", x, y)
-   fs:SetWidth(width or 540)
+   fs:SetWidth(width or (WIDTH - x - 10))
    fs:SetJustifyH("LEFT")
    fs:SetText(text)
    return fs
@@ -56,17 +68,22 @@ local function Check(parent, label, tip, x, y, key, onChange)
 
    cb.tooltipText = tip
    cb:SetScript("OnEnter", function()
-      if not tip then return end
       GameTooltip:SetOwner(cb, "ANCHOR_RIGHT")
       GameTooltip:AddLine(label)
-      GameTooltip:AddLine(tip, 0.7, 0.7, 0.7, true)
+      if tip then GameTooltip:AddLine(tip, 0.7, 0.7, 0.7, true) end
+      if cb.serverSide and not AT.Net.Can("SETTINGS") then
+         GameTooltip:AddLine(" ")
+         GameTooltip:AddLine("Gilt fuer den ganzen Server - nur Spielleiter duerfen das aendern.",
+                             0.91, 0.65, 0.29, true)
+      end
       GameTooltip:Show()
    end)
    cb:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
    cb:SetScript("OnClick", function()
-      AT.Set(key, cb:GetChecked() and 1 or 0)
-      if onChange then onChange(cb:GetChecked() and 1 or 0) end
+      local v = cb:GetChecked() and 1 or 0
+      AT.Set(key, v)
+      if onChange then onChange(v) end
    end)
 
    cb.Load = function() cb:SetChecked(AT.GetBool(key)) end
@@ -94,14 +111,22 @@ local function Slider(parent, label, tip, x, y, minV, maxV, step, key, onChange)
    -- Entprellung: OnValueChanged feuert bei jeder Mausbewegung. Ohne das
    -- ginge pro Pixel ein Serverbefehl raus.
    sl.pending = nil
-   sl:SetScript("OnUpdate", function()
+   local function commit()
       if not sl.pending then return end
-      if (GetTime() - sl.pendingAt) < 0.4 then return end
       local v = sl.pending
       sl.pending = nil
       AT.Set(key, v)
       if onChange then onChange(v) end
+   end
+   sl:SetScript("OnUpdate", function()
+      if not sl.pending then return end
+      if (GetTime() - sl.pendingAt) < 0.4 then return end
+      commit()
    end)
+   -- OnUpdate laeuft nicht, solange der Rahmen verborgen ist: wer das
+   -- Optionsfenster innerhalb der 0,4 s nach dem Ziehen schliesst, wuerde die
+   -- Aenderung verlieren.
+   sl:SetScript("OnHide", commit)
 
    sl:SetScript("OnValueChanged", function()
       local v = math.floor(sl:GetValue() + 0.5)
@@ -112,10 +137,14 @@ local function Slider(parent, label, tip, x, y, minV, maxV, step, key, onChange)
    end)
 
    sl:SetScript("OnEnter", function()
-      if not tip then return end
       GameTooltip:SetOwner(sl, "ANCHOR_RIGHT")
       GameTooltip:AddLine(label)
-      GameTooltip:AddLine(tip, 0.7, 0.7, 0.7, true)
+      if tip then GameTooltip:AddLine(tip, 0.7, 0.7, 0.7, true) end
+      if sl.serverSide and not AT.Net.Can("SETTINGS") then
+         GameTooltip:AddLine(" ")
+         GameTooltip:AddLine("Gilt fuer den ganzen Server - nur Spielleiter duerfen das aendern.",
+                             0.91, 0.65, 0.29, true)
+      end
       GameTooltip:Show()
    end)
    sl:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -171,32 +200,107 @@ local function RefreshProfiles()
    end
 end
 
+-- Serverweite Einstellungen sperren, solange der Server dem Spieler das Aendern
+-- nicht erlaubt. Bei unbekanntem Stand (noch kein Handschlag, aelteres Modul)
+-- bleiben sie frei: ein Servermodul ohne Faehigkeitsfeld beantwortet die Absage
+-- selbst.
+local function ApplyGating()
+   local allowed = AT.Net.Can("SETTINGS")
+   for _, w in ipairs(widgets) do
+      if w.serverSide then
+         if w.IsObjectType and w:IsObjectType("CheckButton") then
+            if allowed then w:Enable() else w:Disable() end
+         else
+            w:EnableMouse(allowed)
+         end
+         w:SetAlpha(allowed and 1 or 0.45)
+      end
+   end
+   if gateNote then
+      if allowed then gateNote:Hide() else gateNote:Show() end
+   end
+end
+
+local function ServerSide(w)
+   w.serverSide = true
+   return w
+end
+
 local function Build()
    if frame then return frame end
 
    frame = CreateFrame("Frame", "AutoTravelOptionsPanel", UIParent)
    frame.name = "AutoTravel"
 
-   local title = frame:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
-   title:SetPoint("TOPLEFT", 16, -16)
-   title:SetText("AutoTravel")
+   -- Der Inhalt liegt in einem ScrollFrame; alle Bausteine haengen an 'content'.
+   local sf = CreateFrame("ScrollFrame", "AutoTravelOptionsScroll", frame, "UIPanelScrollFrameTemplate")
+   sf:SetPoint("TOPLEFT", 0, -4)
+   sf:SetPoint("BOTTOMRIGHT", -28, 4)
+   sf:EnableMouseWheel(true)
+   sf:SetScript("OnMouseWheel", function(self, delta)
+      local bar = _G["AutoTravelOptionsScrollScrollBar"]
+      if bar then bar:SetValue(bar:GetValue() - delta * 40) end
+   end)
 
-   local sub = frame:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
-   sub:SetPoint("TOPLEFT", 16, -38)
-   sub:SetWidth(560)
+   content = CreateFrame("Frame", "AutoTravelOptionsContent", sf)
+   content:SetWidth(WIDTH)
+   content:SetHeight(10)          -- wird am Ende auf die tatsaechliche Hoehe gesetzt
+   sf:SetScrollChild(content)
+
+   local c = content
+   local y = -12                  -- laufende Zeile; wird nach unten gezaehlt
+
+   local function Advance(h) y = y - h end
+
+   local title = c:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
+   title:SetPoint("TOPLEFT", 16, y)
+   title:SetText("AutoTravel")
+   Advance(22)
+
+   local sub = c:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+   sub:SetPoint("TOPLEFT", 16, y)
+   sub:SetWidth(WIDTH - 32)
    sub:SetJustifyH("LEFT")
    sub:SetText("Carbonite liefert das Ziel, das Servermodul mod-autotravel den Weg. " ..
-               "Alle Einstellungen gelten pro Charakter.")
+               "Alle Einstellungen gelten pro Charakter, ausser den ausdruecklich als " ..
+               "serverweit gekennzeichneten.")
    sub:SetTextColor(0.6, 0.63, 0.68)
+   Advance(40)
+
+   -- ---- Verbindung ------------------------------------------------------
+   Header(c, "Verbindung zum Server", 16, y)
+   Advance(28)
+
+   local conn = c:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+   conn:SetPoint("TOPLEFT", 20, y)
+   conn:SetWidth(WIDTH - 40)
+   conn:SetJustifyH("LEFT")
+   O.connText = conn
+   Advance(30)
+
+   table.insert(widgets, Check(c, "Servermodul beim Anmelden abfragen",
+      "Schickt nach dem Login '.at hello', damit Panel und Einstellungen wissen, was der Server " ..
+      "erlaubt. Aus: die Abfrage erfolgt erst beim ersten Start. Ohne das Servermodul " ..
+      "antwortet der Server mit 'Es gibt keinen solchen Befehl'; auf Servern mit " ..
+      "AllowPlayerCommands = 0 wuerde der Befehl sogar in /sagen erscheinen.",
+      16, y, "AutoHello"))
+
+   local hello = AT.UI.Button(c, 150, 22, "Jetzt abfragen", function()
+      AT.Net.state = "UNKNOWN"
+      AT.Net.Hello()
+      AT.Print("Servermodul wird abgefragt ...")
+   end)
+   hello:SetPoint("TOPLEFT", 350, y - 2)
+   Advance(34)
 
    -- ---- Verhalten -------------------------------------------------------
-   Header(frame, "Verhalten des Playerbots", 16, -74)
+   Header(c, "Verhalten des Playerbots", 16, y)
+   Advance(28)
 
-   local y = -102
    for i, p in ipairs(AT.Bot.List()) do
       local col = (i - 1) % 3
       local row = math.floor((i - 1) / 3)
-      local b = AT.UI.Button(frame, 118, 22, p.name, function()
+      local b = AT.UI.Button(c, 118, 22, p.name, function()
          AT.Set("Profile", p.key)
          if AT.Bot.active then AT.Bot.ApplyProfile() end
          RefreshProfiles()
@@ -217,237 +321,215 @@ local function Build()
       end
       table.insert(profButtons, b)
    end
+   Advance(math.ceil(#AT.Bot.List() / 3) * 26 + 6)
 
-   Note(frame, "AutoTravel sendet selbst keinen Ausruestungs-, Talent- oder Handelsbefehl. " ..
-               "'new rpg' wird in jedem Profil abgeschaltet.",
-        20, -158)
+   Note(c, "AutoTravel sendet selbst keinen Ausruestungs-, Talent- oder Handelsbefehl. " ..
+           "'new rpg' wird in jedem Profil abgeschaltet.", 20, y)
+   Advance(30)
 
-   table.insert(widgets, Check(frame, "Playerbot-Selbstmodus mitsteuern",
-      "Schaltet den Selbstmodus beim Start ein und am Ende der Reise wieder aus.",
-      16, -184, "BotControl", function() if AT.UI then AT.UI.Update() end end))
+   table.insert(widgets, Check(c, "Playerbot-Selbstmodus mitsteuern",
+      "Schaltet den Selbstmodus beim Start ein. Der Server kann ihn Spielern ohne " ..
+      "Spielleiterrechte verweigern (AiPlayerbot.SelfBotLevel).",
+      16, y, "BotControl", function() if AT.UI then AT.UI.Update() end end))
+   Advance(26)
 
-   table.insert(widgets, Check(frame, "Selbstmodus am Reiseende ausschalten",
+   table.insert(widgets, Check(c, "Selbstmodus am Reiseende ausschalten",
       "Aus: der Bot bleibt aktiv, wenn das Ziel erreicht ist. Ein: er wird " ..
       "zusammen mit der Reise beendet.",
-      16, -210, "AutoDisableBot"))
+      16, y, "AutoDisableBot"))
 
-   local edit = AT.UI.Button(frame, 160, 22, "Eigene Profile bearbeiten", function()
+   local edit = AT.UI.Button(c, 160, 22, "Eigene Profile bearbeiten", function()
       AT.ProfileEditor.Open()
    end)
-   edit:SetPoint("TOPLEFT", 250, -208)
+   edit:SetPoint("TOPLEFT", 350, y - 2)
+   Advance(28)
 
-   table.insert(widgets, Check(frame, "Erbstuecke schuetzen",
+   table.insert(widgets, Check(c, "Erbstuecke schuetzen",
       "Angelegte Gegenstaende der Qualitaetsstufe 7 werden ueberwacht. Tauscht der " ..
       "Bot eines aus, wird es automatisch wieder angelegt, solange es in den Taschen " ..
       "liegt. Normale Ausruestung darf der Bot weiterhin frei wechseln.",
-      16, -238, "GuardHeirlooms", function(v)
+      16, y, "GuardHeirlooms", function(v)
          if v == 1 then AT.Gear.Snapshot() end
          if AT.UI then AT.UI.Update() end
       end))
 
-   table.insert(widgets, Check(frame, "auch wenn der Bot aus ist",
+   table.insert(widgets, Check(c, "auch wenn der Bot aus ist",
       "Der Schutz laeuft dauerhaft, nicht nur waehrend einer Reise. Empfohlen, " ..
       "weil der Bot auch ausserhalb einer Reise tauschen kann.",
-      250, -238, "GuardAlways", function() if AT.UI then AT.UI.Update() end end))
+      300, y, "GuardAlways", function() if AT.UI then AT.UI.Update() end end))
+   Advance(40)
 
    -- ---- Reise -----------------------------------------------------------
-   Header(frame, "Reise", 16, -276)
+   Header(c, "Reise", 16, y)
+   Advance(34)
 
-   table.insert(widgets, Slider(frame, "Zielradius (yd)",
-      "Ab dieser Entfernung gilt das Ziel als erreicht.",
-      16, -308, 1, 50, 1, "ArriveYards",
+   table.insert(widgets, Slider(c, "Zielradius (yd)",
+      "Ab dieser Entfernung gilt das Ziel als erreicht. Gilt nur fuer deine eigene Reise.",
+      16, y, 1, 50, 1, "ArriveYards",
       function(v)
-         AT.Send("at set arrival " .. v)
+         AT.Set("ArriveCustom", 1)
+         AT.SetSessionOption("arrival", v)
       end))
 
-   table.insert(widgets, Check(frame, "Ankunft laut melden",
-      "Meldungen des Servermoduls im Chat anzeigen statt sie auszublenden.",
-      250, -304, "ShowProtocol",
+   table.insert(widgets, Check(c, "Protokollzeilen im Chat zeigen",
+      "Zeigt die rohen [AT]-Zeilen des Servermoduls im Chat. Nur zur Fehlersuche: die " ..
+      "Meldungen selbst gibt das Addon ohnehin aus.",
+      300, y + 4, "ShowProtocol",
       function(v)
          AT.Set("HideProtocol", (v == 1) and 0 or 1)
       end))
+   Advance(46)
 
+   -- ---- Uebergabe -------------------------------------------------------
+   Header(c, "Uebergabe an den Spieler", 16, y)
+   Advance(28)
+
+   table.insert(widgets, Check(c, "Automatisch zurueckgeben",
+      "Haelt der Autopilot an (Kampf oder ausdruecklich uebernommen), faehrt er nach einer " ..
+      "Weile ohne Eingabe selbst weiter. Aus: er wartet, bis du auf 'Weiter' klickst. " ..
+      "Ein ausdruecklich uebernommener Halt endet nie von selbst; nur die Zeitgrenze des " ..
+      "Servers (Standard 15 Minuten) beendet die Reise dann doch.",
+      16, y, "AutoResume"))
+   Advance(34)
+
+   table.insert(widgets, Slider(c, "Ruhezeit (s)",
+      "So lange darfst du nichts tun, bevor der Countdown beginnt. Bewegung, Mausblick, " ..
+      "Maustasten, Zaubern, Kampf und offene Fenster zaehlen als Eingabe.",
+      16, y, 2, 30, 1, "QuietSeconds"))
+
+   table.insert(widgets, Slider(c, "Countdown (s)",
+      "Sichtbarer Countdown vor der Uebernahme. Jede Eingabe bricht ihn ab. 0 = sofort.",
+      290, y, 0, 10, 1, "CountdownSeconds"))
+   Advance(46)
+
+   Note(c, "Die Steuerung uebernimmst du mit dem Knopf im Panel, einem Mittelklick auf den " ..
+           "Minimap-Knopf oder einer Taste (Optionen -> Tastaturbelegung -> AutoTravel).", 20, y)
+   Advance(34)
 
    -- ---- Natuerliche Navigation -----------------------------------------
-   Header(frame, "Natuerliche Navigation", 16, -352)
+   Header(c, "Natuerliche Navigation (serverweit)", 16, y)
+   Advance(26)
 
-   table.insert(widgets, Check(frame,
+   gateNote = Note(c, "Diese Einstellungen gelten fuer den ganzen Server und sind Spielleitern " ..
+                      "vorbehalten. Du siehst hier den Stand deines Addons.", 20, y)
+   gateNote:SetTextColor(0.91, 0.65, 0.29)
+   Advance(30)
+
+   table.insert(widgets, ServerSide(Check(c,
       "Natuerliche Wege bevorzugen",
       "Bewertet mehrere gueltige NavMesh-Wege. Flache und natuerliche Wege " ..
       "werden gegen steile Berganstiege bevorzugt, solange der Umweg " ..
       "nicht unverhaeltnismaessig gross wird.",
-      16, -382,
-      "NaturalPathing",
-      function(v)
-         AT.SetServerBool("natural", v)
-      end))
+      16, y, "NaturalPathing",
+      function(v) AT.SetServerBool("natural", v) end)))
 
-   table.insert(widgets, Check(frame,
+   table.insert(widgets, ServerSide(Check(c,
       "Contour-Probing",
       "Wenn der gewaehlte Weg wie ein Berganstieg aussieht, sucht das " ..
       "Servermodul automatisch links und rechts nach einem Weg um den Berg.",
-      250, -382,
-      "ContourProbing",
-      function(v)
-         AT.SetServerBool("contour", v)
-      end))
+      300, y, "ContourProbing",
+      function(v) AT.SetServerBool("contour", v) end)))
+   Advance(38)
 
-   table.insert(widgets, Slider(frame,
+   table.insert(widgets, ServerSide(Slider(c,
       "Berg-Hoehengewinn",
-      "Hoehengewinn in Yards, ab dem ein Weg als moeglicher Berganstieg " ..
-      "behandelt wird.",
-      16, -420,
-      5, 50, 1,
-      "ContourTriggerElevation",
-      function(v)
-         AT.SetServerNumber("contour_elevation", v)
-      end))
+      "Hoehengewinn in Yards, ab dem ein Weg als moeglicher Berganstieg behandelt wird.",
+      16, y, 5, 50, 1, "ContourTriggerElevation",
+      function(v) AT.SetServerNumber("contour_elevation", v) end)))
 
-   table.insert(widgets, Slider(frame,
+   table.insert(widgets, ServerSide(Slider(c,
       "Berg-Steigung (%)",
       "Durchschnittliche Steigung, ab der Contour-Probing aktiviert wird.",
-      290, -420,
-      5, 50, 1,
-      "ContourTriggerSlope",
-      function(v)
-         AT.SetServerNumber("contour_slope", v / 100)
-      end))
+      290, y, 5, 50, 1, "ContourTriggerSlope",
+      function(v) AT.SetServerNumber("contour_slope", v / 100) end)))
+   Advance(46)
 
-   table.insert(widgets, Slider(frame,
+   table.insert(widgets, ServerSide(Slider(c,
       "Contour nah (yd)",
       "Erster Suchabstand links und rechts vom direkten Weg.",
-      16, -466,
-      50, 250, 10,
-      "ContourNarrowOffset",
-      function(v)
-         AT.SetServerNumber("contour_narrow", v)
-      end))
+      16, y, 50, 250, 10, "ContourNarrowOffset",
+      function(v) AT.SetServerNumber("contour_narrow", v) end)))
 
-   table.insert(widgets, Slider(frame,
+   table.insert(widgets, ServerSide(Slider(c,
       "Contour weit (yd)",
       "Zweiter, weiterer Suchabstand links und rechts vom direkten Weg.",
-      290, -466,
-      100, 400, 10,
-      "ContourWideOffset",
-      function(v)
-         AT.SetServerNumber("contour_wide", v)
-      end))
+      290, y, 100, 400, 10, "ContourWideOffset",
+      function(v) AT.SetServerNumber("contour_wide", v) end)))
+   Advance(46)
 
-   table.insert(widgets, Slider(frame,
+   table.insert(widgets, ServerSide(Slider(c,
       "Max. Contour-Umweg (%)",
       "Maximal erlaubte Contour-Laenge relativ zur direkten Route.",
-      16, -512,
-      120, 500, 10,
-      "ContourMaxDistanceFactor",
-      function(v)
-         AT.SetServerNumber("contour_factor", v / 100)
-      end))
+      16, y, 120, 500, 10, "ContourMaxDistanceFactor",
+      function(v) AT.SetServerNumber("contour_factor", v / 100) end)))
+   Advance(46)
 
-   Note(frame,
-      "Contour-Probing wird nur aktiviert, wenn der normale Weg einen " ..
-      "nachhaltigen steilen Anstieg enthaelt. Dadurch entstehen normalerweise " ..
-      "keine zusaetzlichen PathGenerator-Abfragen.",
-      20, -558, 540)
-
+   Note(c, "Contour-Probing wird nur aktiviert, wenn der normale Weg einen " ..
+           "nachhaltigen steilen Anstieg enthaelt. Dadurch entstehen normalerweise " ..
+           "keine zusaetzlichen PathGenerator-Abfragen.", 20, y)
+   Advance(40)
 
    -- ---- Teleport --------------------------------------------------------
-   Header(frame, "Teleport", 16, -604)
+   Header(c, "Teleport", 16, y)
+   Advance(28)
 
-   table.insert(widgets, Check(frame,
+   table.insert(widgets, Check(c,
       "Vor dem Teleport nachfragen",
       "Sicherheitsabfrage, damit der Knopf nicht versehentlich ausloest.",
-      16, -632, "ConfirmTp"))
+      16, y, "ConfirmTp"))
 
-   local tpMode = AT.UI.Button(frame, 180, 22, "", function()
-      AT.Set("TeleportMode",
-         (AT.Get("TeleportMode") == "go")
-            and "module"
-            or "go")
-
+   local tpMode = AT.UI.Button(c, 180, 22, "", function()
+      AT.Set("TeleportMode", (AT.Get("TeleportMode") == "go") and "module" or "go")
       O.Load()
+      if AT.UI then AT.UI.Update() end
    end)
-
-   tpMode:SetPoint("TOPLEFT", 250, -630)
-
+   tpMode:SetPoint("TOPLEFT", 300, y - 2)
    tpMode.tip = function()
       GameTooltip:AddLine("Wie teleportiert wird")
-      GameTooltip:AddLine(
-         "Modul: das Servermodul springt selbst (kein GM noetig).",
-         0.7, 0.7, 0.7, true)
-
-      GameTooltip:AddLine(
-         "go xyz: Weltkoordinaten abfragen, dann den GM-Befehl benutzen.",
-         0.7, 0.7, 0.7, true)
+      GameTooltip:AddLine("Modul: das Servermodul springt selbst. Der Server legt fest, ab " ..
+                          "welcher Rechtestufe (AutoTravel.TeleportSecurity, Standard Spielleiter).",
+                          0.7, 0.7, 0.7, true)
+      GameTooltip:AddLine("go xyz: Weltkoordinaten abfragen, dann den GM-Befehl benutzen.",
+                          0.7, 0.7, 0.7, true)
    end
-
    tpMode.Load = function()
-      tpMode.label:SetText(
-         "Weg: |cffdde2ea" ..
-         ((AT.Get("TeleportMode") == "go")
-            and ".go xyz"
-            or "Servermodul") ..
-         "|r")
+      tpMode.label:SetText("Weg: |cffdde2ea" ..
+         ((AT.Get("TeleportMode") == "go") and ".go xyz" or "Servermodul") .. "|r")
    end
-
    table.insert(widgets, tpMode)
-
+   Advance(40)
 
    -- ---- Anzeige ---------------------------------------------------------
-   Header(frame, "Anzeige", 16, -680)
+   Header(c, "Anzeige", 16, y)
+   Advance(28)
 
-   table.insert(widgets, Check(frame,
-      "Panel anzeigen",
-      nil,
-      16, -708,
-      "PanelVisible",
-      function()
-         if AT.UI then AT.UI.Refresh() end
-      end))
+   table.insert(widgets, Check(c, "Panel anzeigen", nil, 16, y, "PanelVisible",
+      function() if AT.UI then AT.UI.Refresh() end end))
+   table.insert(widgets, Check(c, "Minimap-Knopf", nil, 300, y, "MinimapButton",
+      function() if AT.UI then AT.UI.RefreshMinimap() end end))
+   Advance(26)
 
-   table.insert(widgets, Check(frame,
-      "Minimap-Knopf",
-      nil,
-      250, -708,
-      "MinimapButton",
-      function()
-         if AT.UI then AT.UI.RefreshMinimap() end
-      end))
-
-   table.insert(widgets, Check(frame,
-      "Botbefehle im Chat verbergen",
-      nil,
-      16, -734,
-      "HideBotCmd"))
-
-   table.insert(widgets, Check(frame,
-      "Debug-Ausgaben",
-      "Zeigt jeden gesendeten Befehl und die Diagnosemeldungen " ..
-      "des Servermoduls.",
-      250, -734,
-      "Debug",
-      function(v)
-         AT.Send("at debug " .. v)
-      end))
-
+   table.insert(widgets, Check(c, "Botbefehle im Chat verbergen", nil, 16, y, "HideBotCmd"))
+   table.insert(widgets, Check(c, "Debug-Ausgaben",
+      "Zeigt jeden gesendeten Befehl und die Diagnosemeldungen des Servermoduls.",
+      300, y, "Debug",
+      function(v) AT.Send("at debug " .. v, { key = "debug" }) end))
+   Advance(40)
 
    -- ---- Playerbot-Befehle ----------------------------------------------
-   Header(frame, "Playerbot-Befehle", 16, -770)
+   Header(c, "Playerbot-Befehle", 16, y)
+   Advance(28)
 
-   table.insert(widgets, Edit(frame,
-      "Selbstmodus einschalten",
-      16, -798,
-      250,
-      "SelfOnCommand"))
+   table.insert(widgets, Edit(c, "Selbstmodus einschalten", 16, y, 250, "SelfOnCommand"))
+   table.insert(widgets, Edit(c, "Selbstmodus ausschalten", 290, y, 250, "SelfOffCommand"))
+   Advance(46)
 
-   table.insert(widgets, Edit(frame,
-      "Selbstmodus ausschalten",
-      290, -798,
-      250,
-      "SelfOffCommand"))
+   Note(c, "'.playerbots bot self' ist ein Umschalter: derselbe Befehl schaltet ein und aus, " ..
+           "deshalb steht er in beiden Feldern. Die Schreibweise mit '.playerbots help' pruefen. " ..
+           "Enter speichert.", 20, y)
+   Advance(50)
 
-   Note(frame,
-      "Genaue Schreibweise mit '.playerbots help' pruefen. Enter speichert.",
-      20, -840)
+   content:SetHeight(-y + 10)
 
    frame.refresh = function() O.Load() end
    frame.okay    = function() end
@@ -457,6 +539,25 @@ local function Build()
       InterfaceOptions_AddCategory(frame)
    end
    return frame
+end
+
+local function ConnectionText()
+   local N = AT.Net
+   local s = AT.server
+   if N.state == "READY" then
+      return string.format("|cff53d17averbunden|r  -  Modul %s, Protokoll %d, Kontostufe %d%s",
+         s.version, s.proto, s.sec,
+         N.Can("SETTINGS") and "  (darf Serveroptionen aendern)" or "")
+   elseif N.state == "HELLO" then
+      return "|cffe8c44aAnfrage laeuft ...|r"
+   elseif N.state == "ABSENT" then
+      return "|cffe8654akeine Antwort|r  -  Ist mod-autotravel auf dem Server installiert und aktiv?"
+   elseif N.state == "INCOMPATIBLE" then
+      return "|cffe8654aModul zu alt|r  -  Version " .. tostring(s.version)
+   elseif N.state == "DISABLED" then
+      return "|cffe8654amod-autotravel ist serverseitig abgeschaltet.|r"
+   end
+   return "|cff9099a8noch nicht abgefragt|r"
 end
 
 function O.Load()
@@ -470,6 +571,8 @@ function O.Load()
       if w.Load then w.Load() end
    end
    RefreshProfiles()
+   ApplyGating()
+   if O.connText then O.connText:SetText(ConnectionText()) end
 end
 
 function O.Open()
