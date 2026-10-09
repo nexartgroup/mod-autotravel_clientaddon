@@ -309,15 +309,23 @@ local function Build()
       b:SetPoint("TOPLEFT", 20 + col * 126, y - row * 26)
       b.key = p.key
       b.tip = function()
-         GameTooltip:AddLine(p.name)
-         GameTooltip:AddLine(p.desc, 0.7, 0.7, 0.7, true)
+         -- Frisch nachschlagen: das Profil kann seit dem Aufbau der Seite
+         -- geaendert worden sein.
+         local cur = AT.Bot.Find(p.key)
+         GameTooltip:AddLine(cur.name .. (cur.modified and "  (geaendert)" or ""))
+         GameTooltip:AddLine(cur.desc, 0.7, 0.7, 0.7, true)
          GameTooltip:AddLine(" ")
-         if p.customIndex then
-            GameTooltip:AddLine("Eigenes Profil - Unterseite 'Eigene Profile'", 0.55, 0.6, 0.68, true)
+         if cur.customIndex then
+            GameTooltip:AddLine("Eigenes Profil - Unterseite 'Profile'", 0.55, 0.6, 0.68, true)
          else
-            GameTooltip:AddLine("co " .. (p.combat or "-"), 0.55, 0.6, 0.68, true)
-            GameTooltip:AddLine("nc " .. (p.noncombat or "-"), 0.55, 0.6, 0.68, true)
+            GameTooltip:AddLine("co " .. (cur.combat ~= "" and cur.combat or "-"), 0.55, 0.6, 0.68, true)
+            GameTooltip:AddLine("nc " .. (cur.noncombat ~= "" and cur.noncombat or "-"), 0.55, 0.6, 0.68, true)
+            if cur.extra and #cur.extra > 0 then
+               GameTooltip:AddLine(table.concat(cur.extra, "; "), 0.55, 0.6, 0.68, true)
+            end
          end
+         GameTooltip:AddLine(" ")
+         GameTooltip:AddLine("Wartezeit nach dem Kampf: " .. tostring(cur.grace or 2) .. " s", 0.55, 0.6, 0.68, true)
       end
       table.insert(profButtons, b)
    end
@@ -338,7 +346,7 @@ local function Build()
       "zusammen mit der Reise beendet.",
       16, y, "AutoDisableBot"))
 
-   local edit = AT.UI.Button(c, 160, 22, "Eigene Profile bearbeiten", function()
+   local edit = AT.UI.Button(c, 160, 22, "Profile bearbeiten", function()
       AT.ProfileEditor.Open()
    end)
    edit:SetPoint("TOPLEFT", 350, y - 2)

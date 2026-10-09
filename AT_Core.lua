@@ -35,7 +35,7 @@ local AT = AutoTravel
 local CB = AT.Carb
 local N  = AT.Net
 
-AT.VERSION = "11.0"
+AT.VERSION = "11.1"
 local PREFIX = "|cff33ccffAutoTravel|r: "
 
 -- Anzeigenamen fuer Optionen -> Tastaturbelegung (siehe Bindings.xml).
@@ -661,8 +661,41 @@ SlashCmdList["AUTOTRAVEL"] = function(input)
       else AT.Print("Ziel: " .. nameOrErr .. "  |  Parameter: " .. args) end
 
    elseif cmd == "profil" or cmd == "profile" then
+      local sub, arg = string.match(rest, "^(%S+)%s*(.-)$")
+      sub = sub and string.lower(sub) or ""
+      arg = string.lower(arg or "")
+
       if rest == "" then
          AT.Bot.PrintProfiles()
+
+      elseif sub == "bearbeiten" or sub == "edit" then
+         AT.ProfileEditor.Open()
+
+      elseif sub == "reset" or sub == "zuruecksetzen" then
+         -- /at profil reset <name>   ein festes Profil auf den Standard
+         -- /at profil reset alle     alle festen Profile
+         local B = AT.Bot
+         if arg == "" then
+            AT.Warn("Welches Profil? '/at profil reset <name>' oder '/at profil reset alle'.")
+         elseif arg == "alle" or arg == "all" then
+            B.ResetAllBuiltin()
+            AT.Print("Alle vorgegebenen Profile sind wieder auf den Standardwerten.")
+         else
+            local key
+            for _, d in ipairs(B.Builtin) do
+               if d.key == arg or string.lower(d.name) == arg then key = d.key end
+            end
+            if not key then
+               AT.Warn("Nur vorgegebene Profile lassen sich zuruecksetzen (eigene: 'Leeren' im Editor).")
+               return
+            end
+            B.ResetBuiltin(key)
+            AT.Print("Profil " .. B.BuiltinDefault(key).name .. " ist wieder auf den Standardwerten.")
+         end
+         if B.IsRunning() then B.ApplyProfile() end
+         if AT.ProfileEditor and AT.ProfileEditor.Refresh then AT.ProfileEditor.Refresh() end
+         if AT.UI then AT.UI.Update() end
+
       else
          local found
          local want = string.lower(rest)

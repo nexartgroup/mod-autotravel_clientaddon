@@ -97,7 +97,10 @@ Die Pruefung bleibt beim Server; die gesperrten Knoepfe sind nur Komfort.
 | `/at knoten` | Zustand des Playerbot-Knotengraphen |
 | `/at ziel <yd>` | Zielradius der eigenen Reise |
 | `/at ruhe <s>` | Ruhezeit bis zur Uebernahme |
-| `/at profil`, `/at bot`, `/at botan`, `/at botaus` | Playerbot-Profil und Selbstmodus |
+| `/at profil`, `/at profil <name>` | Profile anzeigen / ein Profil waehlen |
+| `/at profil bearbeiten` | Profil-Editor oeffnen |
+| `/at profil reset <name>`, `/at profil reset alle` | vorgegebene Profile auf die Standardwerte zuruecksetzen |
+| `/at bot`, `/at botan`, `/at botaus` | Playerbot-Steuerung / Selbstmodus |
 | `/at karte <id>`, `/at karten` | Karten-ID erzwingen / Kartentabelle neu aufbauen |
 | `/at optionen`, `/at panel`, `/at knopf`, `/at debug` | Oberflaeche und Diagnose |
 
@@ -108,6 +111,30 @@ Optional steuert das Addon den Selbstmodus von mod-playerbots mit (Profile wie
 (`co`, `nc`, `ll`); `new rpg` wird in jedem festen Profil abgeschaltet, weil es
 Ausruestung wechseln kann. Der Erbstueckschutz legt ein vom Bot abgelegtes
 Erbstueck wieder an.
+
+### Profile
+
+Sechs vorgegebene Profile (Minimal, Aengstlich, Verteidigen, Normal, Aggressiv, Plus) und
+drei eigene. **Normal** lootet: es setzt `nc +loot` und `ll normal` und wartet nach dem Kampf
+7 s, damit der Bot die Beute aufnehmen kann, bevor der Autopilot weiterlaeuft. (Bis 11.0
+stand dort `-loot`, das Profil nannte sich Normal und lootete nie.) Minimal, Aengstlich und
+Verteidigen lassen die Beute bewusst liegen.
+
+**Die vorgegebenen Profile sind aenderbar.** Unter *Interface -> AddOns -> AutoTravel ->
+Profile* (oder `/at profil bearbeiten`) waehlst du ein Profil und stellst Strategien,
+Zusatzbefehle und die Wartezeit nach dem Kampf ein. Geaenderte Profile tragen ein `*`.
+**Auf Standard zuruecksetzen** (oder `/at profil reset <name>`, `/at profil reset alle`)
+verwirft die Aenderungen; der Standard bleibt im Addon und geht nie verloren.
+
+Jede Strategie eines vorgegebenen Profils hat **drei Zustaende**, ein Klick wechselt:
+*nicht gesetzt* (grau: es bleibt, was `co !` / `nc !` als Standard hinterlassen), *an* (`+`)
+und *aus* (`-`). Die vorgegebenen Profile setzen bewusst nicht alles -- Normal etwa fasst
+`tank` und `boost` nicht an --, und mit nur zwei Zustaenden wuerde das erste Speichern aus
+jeder nicht gesetzten Strategie ein ausdrueckliches `-` machen. Bei eigenen Profilen gilt
+wie bisher: jede Strategie wird ausdruecklich mit `+` oder `-` gesetzt.
+
+Wird das gerade laufende Profil bearbeitet, geht es eine Sekunde nach der letzten Aenderung
+einmal neu an den Bot (nicht bei jedem Klick).
 
 * `.playerbots bot self` ist ein **Umschalter**: derselbe Befehl schaltet ein und
   aus. Das Addon liest die Antwort des Servers mit ("SelfBot is now active." /
@@ -169,7 +196,8 @@ Das Addon spricht Protokoll 4 und versteht auch Module mit Protokoll 3.
 ## Gespeicherte Daten
 
 `AutoTravelDB` (je Charakter): Einstellungen, Fensterposition, aktives Profil.
-`AutoTravelGlobalDB` (kontoweit): eigene Playerbot-Profile.
+`AutoTravelGlobalDB` (kontoweit): eigene Playerbot-Profile (`custom`) und deine Aenderungen
+an den vorgegebenen (`builtin`; nur Profile, die du geaendert hast).
 Beim Aktualisieren aus einer aelteren Fassung bleiben alle Werte erhalten; fehlende
 neue Einstellungen erhalten Standardwerte. Der fruehere Standardbefehl
 `.playerbots bot self on/off` wird auf den heutigen Umschalter umgestellt, falls du
