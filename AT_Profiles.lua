@@ -242,7 +242,6 @@ end
 
 local function LoadSelection()
    if not frame then return end
-   local B = AT.Bot
    local v = View()
    local builtin = IsBuiltin()
 

@@ -676,7 +676,7 @@ SlashCmdList["AUTOTRAVEL"] = function(input)
          -- /at profil reset <name>   ein festes Profil auf den Standard
          -- /at profil reset alle     alle festen Profile
          local B = AT.Bot
-         local touched = false       -- hat sich am wirksamen Profil etwas geaendert?
+         local touched              -- hat sich am wirksamen Profil etwas geaendert?
          if arg == "" then
             AT.Warn("Welches Profil? '/at profil reset <name>' oder '/at profil reset alle'.")
             return
