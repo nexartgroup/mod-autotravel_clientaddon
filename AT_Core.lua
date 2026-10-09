@@ -35,7 +35,7 @@ local AT = AutoTravel
 local CB = AT.Carb
 local N  = AT.Net
 
-AT.VERSION = "11.1"
+AT.VERSION = "11.2"
 local PREFIX = "|cff33ccffAutoTravel|r: "
 
 -- Anzeigenamen fuer Optionen -> Tastaturbelegung (siehe Bindings.xml).
@@ -45,6 +45,8 @@ BINDING_NAME_AUTOTRAVEL_PAUSE  = "Steuerung uebernehmen / zurueckgeben"
 BINDING_NAME_AUTOTRAVEL_BOT    = "Playerbot-Selbstmodus umschalten"
 
 AT.active   = false
+AT.pendingStartAt = nil     -- Zeitpunkt eines gesendeten, noch nicht angenommenen Starts
+AT.supportOn = false        -- Selbstmodus/Erbstueckschutz laufen fuer die aktuelle Reise
 AT.lastRx   = 0
 AT.status   = { state = "IDLE", distance = 0, target = "-", mounted = 0, points = 0,
                 attempts = 0, leg = 0, legs = 0, progress = 0, flags = 0,
@@ -410,10 +412,36 @@ function AT.Start()
    AT.status.state  = "STARTING"
    AT.status.target = name
    AT.status.progress = 0
-   if AT.Bot then AT.Bot.Enable() end
+   -- Selbstmodus und Erbstueckschutz erst, wenn der Server den Start angenommen hat
+   -- (siehe AT.BeginTripSupport). Eine Absage -- etwa "keine Verbindung ueber die
+   -- Kartengrenze" -- soll den Bot nicht trotzdem einschalten.
+   AT.pendingStartAt = GetTime()
+   -- Der Erbstueck-Schnappschuss gehoert an den Klick, nicht an die Antwort: die
+   -- Ueberwachung ist ab AT.active scharf und soll nicht mit einem alten Stand arbeiten.
    if AT.Gear then AT.Gear.Start() end
    if AT.UI then AT.UI.Update() end
    if N.IsReady() then Watchdog(true) end
+end
+
+-- Wie lange nach dem Senden eines Starts die erste aktive Statuszeile noch als
+-- dessen Annahme gilt. Grosszuegig: ein Start mit langer Route geht in mehreren
+-- Befehlen hinaus, und vor dem Handschlag wartet er in der Schlange.
+local START_WINDOW = 30
+
+-- Der Server hat den Start angenommen: Playerbot-Selbstmodus und Erbstueckschutz
+-- einschalten. Wird vom Statusempfang aufgerufen, nicht beim Klick.
+function AT.BeginTripSupport()
+   AT.pendingStartAt = nil
+   -- Nur wenn Bot.Enable wirklich etwas tut: mit abgeschalteter Playerbot-Steuerung
+   -- kehrt es sofort zurueck, und ein spaeteres Disable (Umschalter!) wuerde den Bot
+   -- dann EINschalten.
+   AT.supportOn = AT.GetBool("BotControl")
+   if AT.Bot then AT.Bot.Enable() end
+end
+
+-- true, solange ein gesendeter Start auf seine Annahme wartet
+function AT.StartPending()
+   return AT.pendingStartAt ~= nil and (GetTime() - AT.pendingStartAt) <= START_WINDOW
 end
 
 function AT.Stop()
@@ -423,10 +451,15 @@ function AT.Stop()
    -- Reise, nichts zu tun) und dann den Start -- und das Addon zeigte IDLE,
    -- waehrend der Autopilot loslief.
    N.DropTag("start")
+   AT.pendingStartAt = nil
+   -- Disable ist ein Umschalter: nur ausschalten, was diese Reise eingeschaltet hat.
+   -- Ein Stop vor der Antwort des Servers hat nichts eingeschaltet.
+   local hadSupport = AT.supportOn
+   AT.supportOn = false
    AT.SendNow("at stop", "stop")
    AT.active = false
    AT.status.state = "IDLE"
-   if AT.Bot and AT.GetBool("AutoDisableBot") then AT.Bot.Disable() end
+   if hadSupport and AT.Bot and AT.GetBool("AutoDisableBot") then AT.Bot.Disable() end
    if AT.UI then AT.UI.Update() end
 end
 
