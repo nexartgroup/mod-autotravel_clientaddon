@@ -123,6 +123,7 @@ end
 -- (kein Modul, zu alt, abgeschaltet). Ein Start, der auf den Handschlag wartete,
 -- liesse AT.active sonst auf true und den Zustand auf "Startet" stehen.
 local function AbortLocalTrip()
+   AT.pendingStartAt = nil
    if AT.active or AT.status.state == "STARTING" then
       AT.active = false
       AT.status.state = "IDLE"
@@ -318,10 +319,26 @@ local function OnStatus(body)
    local wasActive = AT.active
    AT.active = not INACTIVE[st]
 
+   -- Die erste aktive Statuszeile nach einem Start ist dessen Annahme: jetzt erst
+   -- Selbstmodus und Erbstueckschutz einschalten. Eine Absage kommt als Textmeldung
+   -- mit einer Statuszeile IDLE und schaltet nichts ein.
+   if AT.pendingStartAt then
+      if not AT.StartPending() then
+         AT.pendingStartAt = nil
+      elseif not INACTIVE[st] then
+         AT.BeginTripSupport()
+      end
+   end
+
    if wasActive and not AT.active then
-      -- Reise ist serverseitig zu Ende (Ziel erreicht, Abbruch, Fehler).
-      if AT.Bot and AT.GetBool("AutoDisableBot") then AT.Bot.Disable() end
-      if AT.Gear and AT.Gear.Stop then AT.Gear.Stop() end
+      -- Reise ist serverseitig zu Ende (Ziel erreicht, Abbruch, Fehler). Den
+      -- Selbstmodus nur ausschalten, wenn diese Reise ihn eingeschaltet hat: Disable
+      -- ist ein Umschalter und wuerde ihn nach einer abgelehnten Reise einschalten.
+      if AT.supportOn then
+         if AT.Bot and AT.GetBool("AutoDisableBot") then AT.Bot.Disable() end
+         if AT.Gear and AT.Gear.Stop then AT.Gear.Stop() end
+      end
+      AT.supportOn = false
    end
 
    if AT.Handover then AT.Handover.OnStatus(old, st) end

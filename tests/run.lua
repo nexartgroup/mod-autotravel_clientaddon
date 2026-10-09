@@ -1448,5 +1448,116 @@ test("Optionen: der Tooltip eines geleerten eigenen Profils zeigt nicht ein ande
    check(lines[1] and not lines[1]:find("Verteidigen", 1, true), "...nicht Verteidigen")
 end)
 
+
+-- ---------------------------------------------------------------------------
+-- Start: Selbstmodus erst nach Annahme durch den Server
+-- ---------------------------------------------------------------------------
+
+local function beginTripLine() return "TRAVELING|300|Ziel|8|20|0|1|1|10" end
+
+test("abgelehnter Start schaltet weder Selbstmodus noch Profil ein", function()
+   ready()
+   installCarbonite(1)
+   AutoTravel.MapIds.Build(true)
+   AutoTravel.Start()
+   W.Advance(1)
+   check(count(".at start") == 1, "Start gesendet")
+   eq(count(".playerbots bot self"), 0, "Selbstmodus noch nicht eingeschaltet (Antwort steht aus)")
+   -- der Server lehnt ab: Textmeldung und Statuszeile IDLE
+   W.ServerLine("[AT]M|Das Ziel liegt auf einer anderen Karte (Map 0), und AutoTravel findet keine Verbindung dorthin.")
+   status("IDLE|0|-|0|0|0|0|0|0")
+   W.Advance(10)
+   eq(AutoTravel.active, false, "nicht aktiv")
+   eq(count(".playerbots bot self"), 0, "nach der Absage bleibt der Selbstmodus aus")
+   eq(#whispers(), 0, "kein Profil an den Bot gesendet")
+   check(not AutoTravel.Bot.active, "Bot nicht als laufend gemerkt")
+
+   -- dreimal versuchen: nie ein Profilschwall
+   for _ = 1, 3 do
+      AutoTravel.Start()
+      W.Advance(1)
+      status("IDLE|0|-|0|0|0|0|0|0")
+      W.Advance(1)
+   end
+   eq(#whispers(), 0, "auch nach mehreren Versuchen keine Fluesternachricht")
+end)
+
+test("angenommener Start schaltet Selbstmodus und Profil ein", function()
+   ready()
+   installCarbonite(1)
+   AutoTravel.MapIds.Build(true)
+   AutoTravel.Set("Profile", "normal")
+   AutoTravel.Start()
+   W.Advance(1)
+   eq(count(".playerbots bot self"), 0, "vor der Antwort noch nichts")
+   status(beginTripLine())
+   W.Advance(10)
+   eq(count(".playerbots bot self"), 1, "Selbstmodus eingeschaltet")
+   check(hasWhisper("co !") and hasWhisper("nc !"), "Profil gesendet")
+   check(hasWhisper("ll normal"), "ll normal gesendet")
+   eq(AutoTravel.supportOn, true, "Hilfen laufen")
+   eq(AutoTravel.pendingStartAt, nil, "kein wartender Start mehr")
+
+   -- weitere Statuszeilen schalten nichts doppelt ein
+   status(beginTripLine())
+   status(beginTripLine())
+   W.Advance(10)
+   eq(count(".playerbots bot self"), 1, "nur einmal")
+end)
+
+test("Stop vor der Antwort: eine spaete Statuszeile schaltet nichts ein", function()
+   ready()
+   installCarbonite(1)
+   AutoTravel.MapIds.Build(true)
+   AutoTravel.Start()
+   W.Advance(1)
+   AutoTravel.Stop()
+   status(beginTripLine())             -- die Antwort war schon unterwegs
+   W.Advance(10)
+   eq(count(".playerbots bot self"), 0, "kein Selbstmodus nach dem Stop")
+   eq(#whispers(), 0, "kein Profil")
+end)
+
+test("eine Statuszeile lange nach dem Start gilt nicht mehr als dessen Annahme", function()
+   ready()
+   installCarbonite(1)
+   AutoTravel.MapIds.Build(true)
+   AutoTravel.Start()
+   W.Advance(1)
+   status("IDLE|0|-|0|0|0|0|0|0")
+   W.Advance(40)                       -- weit ueber die Frist
+   check(not AutoTravel.StartPending(), "nichts wartet mehr")
+   status(beginTripLine())
+   W.Advance(10)
+   eq(count(".playerbots bot self"), 0, "nicht eingeschaltet")
+   eq(AutoTravel.pendingStartAt, nil, "Merker gesetzt zurueck")
+end)
+
+test("AutoDisableBot: nur eine angenommene Reise schaltet den Bot am Ende wieder aus", function()
+   ready()
+   installCarbonite(1)
+   AutoTravel.MapIds.Build(true)
+   AutoTravel.Set("AutoDisableBot", 1)
+
+   -- abgelehnt: kein Umschaltbefehl (der wuerde den Bot EINschalten)
+   AutoTravel.Start()
+   W.Advance(1)
+   status("IDLE|0|-|0|0|0|0|0|0")
+   W.Advance(2)
+   eq(count(".playerbots bot self"), 0, "abgelehnt: kein Umschalter gesendet")
+
+   -- angenommen und beendet: der Bot geht wieder aus
+   AutoTravel.Start()
+   W.Advance(1)
+   status(beginTripLine())
+   W.Advance(10)
+   eq(count(".playerbots bot self"), 1, "eingeschaltet")
+   status("ARRIVED|0|Ziel|0|0|0|1|1|100")
+   status("IDLE|0|-|0|0|0|0|0|0")
+   W.Advance(5)
+   eq(count(".playerbots bot self"), 2, "am Ende wieder ausgeschaltet")
+   eq(AutoTravel.supportOn, false, "Hilfen aus")
+end)
+
 print(string.format("\n%d Pruefungen, %d Fehler", passes, failures))
 os.exit(failures == 0 and 0 or 1)

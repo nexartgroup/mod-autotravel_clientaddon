@@ -112,6 +112,13 @@ Optional steuert das Addon den Selbstmodus von mod-playerbots mit (Profile wie
 Ausruestung wechseln kann. Der Erbstueckschutz legt ein vom Bot abgelegtes
 Erbstueck wieder an.
 
+Der Selbstmodus wird erst eingeschaltet (und das Profil gesendet), **wenn der Server den
+Start angenommen hat**. Lehnt er ab -- etwa "keine Verbindung ueber die Kartengrenze" --,
+bleibt der Bot aus und es geht keine Flustermeldung hinaus. (Bis 11.1 schaltete schon der
+Klick auf Start den Bot ein, auch bei einer Absage, und sendete das Profil bei jedem
+Versuch erneut.) "Selbstmodus am Reiseende ausschalten" greift nur nach einer Reise, die
+den Bot selbst eingeschaltet hat.
+
 ### Profile
 
 Sechs vorgegebene Profile (Minimal, Aengstlich, Verteidigen, Normal, Aggressiv, Plus) und
