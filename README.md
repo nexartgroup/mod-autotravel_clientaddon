@@ -160,9 +160,15 @@ einmal neu an den Bot (nicht bei jedem Klick).
 * Der Server kann den Selbstmodus verweigern (`AiPlayerbot.SelfBotLevel`; Standard
   1 = nur Spielleiter). Das Addon sagt dann, warum, und verwirft die
   Strategiebefehle, die schon in der Warteschlange standen.
-* **Nicht zusammen mit BotPad** betreiben. Beide wuerden dem Bot bei jedem
-  Einschalten Strategien schicken. BotPad erkennt AutoTravel und stellt seine
-  Strategiesteuerung dann ab.
+* **BotPad (ab 1.2) laeuft daneben.** BotPad erkennt AutoTravel beim Anmelden und
+  setzt dem Bot dann keine Strategien (Moduswahl und "Strategien beim
+  Ausschalten zuruecksetzen" sind auf seiner Einstellungsseite gesperrt). Es gibt
+  die Meldungen des Servermoduls nicht noch einmal aus und filtert keine
+  `[AT]`-Zeilen; das uebernimmt AutoTravel. Umschalten des Selbstmodus und der
+  Teleport zum Carbonite-Ziel bleiben bei BotPad. BotPad erkennt AutoTravel nur
+  am Geladensein: auch mit ausgeschaltetem "Playerbot-Selbstmodus mitsteuern" setzt es dann
+  keine Strategien. Aeltere BotPad-Staende (vor 1.2) schickten dem Bot weiter
+  eigene Strategien und gaben jede Meldung doppelt aus.
 
 ## Verbindung und Protokoll
 
