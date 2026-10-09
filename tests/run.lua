@@ -1006,7 +1006,7 @@ test("Profil Normal lootet: +loot und ll normal, keine -loot-Strategie, Wartezei
    AutoTravel.Set("Profile", "normal")
    B.ApplyProfile()
    W.Advance(10)
-   check(hasWhisper("nc +loot,-grind,-new rpg,-follow,+food"), "nc setzt +loot")
+   check(hasWhisper("nc +loot,-gather,-grind,-new rpg,-follow,+food"), "nc setzt +loot, aber kein gather")
    check(hasWhisper("ll normal"), "ll normal wird gesendet")
    check(not anyWhisperMatches("-loot"), "nirgends -loot")
    check(W.SentContains(".at set grace 7"), "Wartezeit 7 s, damit der Bot looten kann")
@@ -1145,9 +1145,16 @@ test("Editor: Wartezeit und Zusatzbefehle werden gespeichert und geprueft", func
    enter("AutoTravelProfileGrace", "99")
    eq(B.Find("normal").grace, 30, "nach oben begrenzt")
    enter("AutoTravelProfileGrace", "-4")
-   eq(B.Find("normal").grace, 0, "nach unten begrenzt")
+   eq(B.Find("normal").grace, 0.1, "nach unten begrenzt: 0 waere beim Server 'keine Vorgabe', nicht 'keine Pause'")
+   enter("AutoTravelProfileGrace", "0")
+   eq(B.Find("normal").grace, 0.1, "0 wird zu 0.1")
    enter("AutoTravelProfileGrace", "abc")
-   eq(B.Find("normal").grace, 0, "Unsinn aendert nichts")
+   eq(B.Find("normal").grace, 0.1, "Unsinn aendert nichts")
+   enter("AutoTravelProfileGrace", "0,25")
+   eq(B.Find("normal").grace, 0.25, "zwei Dezimalstellen bleiben")
+   eq(_G.AutoTravelProfileGrace:GetText(), "0.25", "...und werden so angezeigt")
+   enter("AutoTravelProfileGrace", "1,5")
+   eq(_G.AutoTravelProfileGrace:GetText(), "1.5", "keine angehaengte Null")
    local warned = false
    for _, m in ipairs(W.messages) do if m:find("Wartezeit", 1, true) and m:find("Zahl", 1, true) then warned = true end end
    check(warned, "Hinweis bei ungueltiger Eingabe")
@@ -1248,6 +1255,198 @@ test("/at info und alle Slash-Befehle laufen fehlerfrei", function()
 end)
 
 -- ---------------------------------------------------------------------------
+
+-- ---------------------------------------------------------------------------
+-- Profile: Nachbesserungen nach der Durchsicht
+-- ---------------------------------------------------------------------------
+
+-- Auswahlknopf im Profil-Editor (nicht die gleichnamigen auf der Optionsseite)
+local function selectorButton(label)
+   for _, f in ipairs(W.frames) do
+      if f.label and f.label.GetText and f.label:GetText():find(label, 1, true) == 1
+         and f.__scripts.OnClick and f.__parent == _G.AutoTravelProfileContent then
+         return f
+      end
+   end
+end
+
+test("Normal sammelt keine Ressourcen, Plus schon", function()
+   ready()
+   local B = AutoTravel.Bot
+   check(B.Find("normal").noncombat:find("-gather", 1, true) ~= nil, "Normal: -gather")
+   check(B.Find("normal").noncombat:find("+loot", 1, true) ~= nil, "Normal: +loot")
+   check(B.Find("plus").noncombat:find("+gather", 1, true) ~= nil, "Plus: +gather")
+   -- der Editor zeigt es nicht als "nicht gesetzt"
+   AutoTravel.ProfileEditor.Select("builtin", "normal")
+   check(flagBox("noncombat", "gather").text:GetText():find("-", 1, true) ~= nil, "Editor: -gather")
+end)
+
+test("Editor: wieder auf den Standard gebrachte Flaggen hinterlassen keine Ueberschreibung", function()
+   ready()
+   local B = AutoTravel.Bot
+   AutoTravel.ProfileEditor.Select("builtin", "normal")
+   local tank = flagBox("combat", "tank")
+   click(tank)
+   check(B.HasOverride("normal") and B.IsModified("normal"), "nach dem ersten Klick geaendert")
+   click(tank)
+   check(B.HasOverride("normal"), "aus ist immer noch eine Abweichung")
+   click(tank)                                      -- wieder nicht gesetzt
+   check(not B.HasOverride("normal"), "...und jetzt ist die Ueberschreibung verschwunden")
+   check(not B.IsModified("normal"), "nicht mehr geaendert")
+
+   -- Zusatzbefehle und Wartezeit genauso
+   enter("AutoTravelProfileGrace", "3")
+   check(B.HasOverride("normal"), "Wartezeit 3: geaendert")
+   enter("AutoTravelProfileGrace", "7")
+   check(not B.HasOverride("normal"), "Wartezeit wieder 7: keine Ueberschreibung")
+
+   -- Titelzeile und "Auf Standard"-Knopf folgen schon dem Klick
+   local reset
+   for _, f in ipairs(W.frames) do if f.label and f.label:GetText() == "Auf Standard zuruecksetzen" then reset = f end end
+   check(reset ~= nil, "Knopf gefunden")
+   eq(reset:IsEnabled(), nil, "unveraendert: gesperrt")
+   click(flagBox("combat", "boost"))
+   check(reset:IsEnabled() ~= nil, "nach dem Klick: freigegeben")
+   check(_G.AutoTravelProfilePanel ~= nil, "Seite vorhanden")
+
+   -- eine spaetere Aenderung des Standards erreicht Profile ohne Ueberschreibung
+   B.ResetBuiltin("normal")
+   local saved = B.Builtin[4].noncombat
+   B.Builtin[4].noncombat = saved .. ",+food"
+   check(B.Find("normal").noncombat:find("+food,+food", 1, true) ~= nil, "neuer Standard wirkt")
+   B.Builtin[4].noncombat = saved
+end)
+
+test("/at profil reset ohne Namen oder fuer ein anderes Profil sendet dem Bot nichts", function()
+   ready()
+   local B = AutoTravel.Bot
+   AutoTravel.Set("Profile", "normal")
+   B.Enable()
+   W.Advance(10)
+   W.ClearSent()
+
+   SlashCmdList["AUTOTRAVEL"]("profil reset")
+   W.Advance(10)
+   eq(#whispers(), 0, "ohne Namen: keine Fluesternachricht")
+
+   B.BuiltinOverride("plus").combat.tank = true      -- Plus geaendert, Normal nicht
+   SlashCmdList["AUTOTRAVEL"]("profil reset plus")
+   W.Advance(10)
+   eq(#whispers(), 0, "ein Profil, das nicht aktiv ist: nichts zu senden")
+   check(not B.IsModified("plus"), "...aber zurueckgesetzt")
+
+   SlashCmdList["AUTOTRAVEL"]("profil reset alle")
+   W.Advance(10)
+   eq(#whispers(), 0, "alle, aktives Profil unveraendert: nichts zu senden")
+
+   B.BuiltinOverride("normal").combat.tank = true
+   SlashCmdList["AUTOTRAVEL"]("profil reset normal")
+   W.Advance(10)
+   check(hasWhisper("co !"), "das aktive, geaenderte Profil wird neu gesendet")
+end)
+
+test("Editor: eine Aenderung wird nicht doppelt gesendet, wenn inzwischen etwas angewendet wurde", function()
+   ready()
+   local B = AutoTravel.Bot
+   AutoTravel.Set("Profile", "normal")
+   B.Enable()
+   W.Advance(10)
+   AutoTravel.ProfileEditor.Select("builtin", "normal")
+   W.ClearSent()
+
+   click(flagBox("combat", "boost"))                 -- startet den Timer (1 s)
+   B.ApplyProfile()                                  -- etwas anderes wendet das Profil an
+   W.Advance(10)
+   local n = 0
+   for _, t in ipairs(whispers()) do if t == "co !" then n = n + 1 end end
+   eq(n, 1, "'co !' nur einmal")
+
+   W.ClearSent()
+   click(flagBox("combat", "boost"))                 -- allein: der Timer sendet
+   W.Advance(10)
+   check(hasWhisper("co !"), "ohne andere Anwendung wird gesendet")
+end)
+
+test("Editor: das gewaehlte Profil bleibt hervorgehoben, auch wenn die Maus den Knopf verlaesst", function()
+   ready()
+   AutoTravel.ProfileEditor.Select("builtin", "normal")
+   local b = selectorButton("Normal")
+   check(b ~= nil, "Auswahlknopf gefunden")
+   local last
+   b.SetBackdropColor = function(_, r, g, bl) last = { r, g, bl } end
+   b.__scripts.OnLeave(b)
+   check(last and last[3] > 0.4, "ausgewaehlt: Hervorhebung bleibt (blau)")
+   check(b.selected == true, "Merker gesetzt")
+
+   AutoTravel.ProfileEditor.Select("builtin", "plus")
+   check(b.selected == false, "nicht mehr ausgewaehlt")
+   b.__scripts.OnLeave(b)
+   check(last and last[3] < 0.3, "abgewaehlt: Ruhefarbe")
+end)
+
+test("Editor: lange Namen eigener Profile sprengen die Knoepfe nicht", function()
+   ready()
+   local B = AutoTravel.Bot
+   B.CustomSlot(2).name = "Ein sehr langer Profilname"
+   AutoTravel.ProfileEditor.Select("custom", 2)
+   local found
+   for _, f in ipairs(W.frames) do
+      if f.label and f.label.GetText and f.label:GetText():find("Ein sehr", 1, true) then found = f.label:GetText() end
+   end
+   check(found and #found <= 14, "Beschriftung gekuerzt: " .. tostring(found))
+   check(_G.AutoTravelProfileName.__maxLetters == nil or _G.AutoTravelProfileName.__maxLetters <= 16, "Namenslaenge begrenzt")
+end)
+
+test("beschaedigte eigene Profile (von Hand bearbeitete Datei) bringen weder Anmeldung noch Editor zu Fall", function()
+   W.Install()
+   _G.AutoTravelGlobalDB = { custom = {
+      { combat = true, noncombat = "x", extra = 5, name = 7, grace = "viel" },
+      "kaputt",
+      { combat = { dps = true }, noncombat = false },
+   } }
+   W.LoadToc(".", "AutoTravel.toc")
+   W.Fire("ADDON_LOADED", "AutoTravel")
+   local ok, err = pcall(W.Fire, "PLAYER_LOGIN")
+   check(ok, "Anmeldung: " .. tostring(err))
+   local B = AutoTravel.Bot
+   ok, err = pcall(B.List)
+   check(ok, "List: " .. tostring(err))
+   check(B.CustomUsed(1) == false, "Platz 1 leer nach der Reparatur")
+   check(B.CustomUsed(2) == false, "Platz 2 leer")
+   check(B.CustomUsed(3) == true, "Platz 3 behaelt, was brauchbar war")
+   eq(type(B.CustomSlot(1).combat), "table", "combat ist wieder eine Tabelle")
+   eq(B.CustomSlot(1).extra, "", "extra ist wieder Text")
+   eq(B.CustomSlot(1).grace, 2.0, "grace ist wieder eine Zahl")
+   eq(B.CustomSlot(2).name, "Eigenes 2", "Name ersetzt")
+   ok, err = pcall(AutoTravel.ProfileEditor.Select, "custom", 1)
+   check(ok, "Editor: " .. tostring(err))
+   ok, err = pcall(function() click(flagBox("combat", "dps")) end)
+   check(ok, "Klick: " .. tostring(err))
+end)
+
+test("Optionen: der Tooltip eines geleerten eigenen Profils zeigt nicht ein anderes Profil", function()
+   W.Install()
+   _G.AutoTravelGlobalDB = { custom = { { name = "Mein Profil", combat = { dps = true }, noncombat = {},
+                                          extra = "", grace = 2.0 } } }
+   W.LoadToc(".", "AutoTravel.toc")
+   W.Fire("ADDON_LOADED", "AutoTravel")
+   W.Fire("PLAYER_LOGIN")
+   local btn
+   for _, f in ipairs(W.frames) do
+      if f.key == "custom1" then btn = f end
+   end
+   check(btn ~= nil and btn.tip ~= nil, "Knopf des eigenen Profils auf der Optionsseite")
+
+   AutoTravel.Bot.Global().custom[1] = nil          -- geleert: Find liefert ein anderes Profil
+   local lines = {}
+   local old = _G.GameTooltip.AddLine
+   _G.GameTooltip.AddLine = function(_, text) lines[#lines + 1] = text end
+   btn.tip()
+   _G.GameTooltip.AddLine = old
+   check(lines[1] and lines[1]:find("Mein Profil", 1, true) ~= nil,
+         "Tooltip nennt weiter den eigenen Namen: " .. tostring(lines[1]))
+   check(lines[1] and not lines[1]:find("Verteidigen", 1, true), "...nicht Verteidigen")
+end)
 
 print(string.format("\n%d Pruefungen, %d Fehler", passes, failures))
 os.exit(failures == 0 and 0 or 1)

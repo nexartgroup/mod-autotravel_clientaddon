@@ -94,12 +94,29 @@ function UI.Button(parent, w, h, label, onClick)
       end
    end)
    b:SetScript("OnLeave", function()
-      b:SetBackdropColor(0.13, 0.15, 0.18, 1)
-      b:SetBackdropBorderColor(0.26, 0.29, 0.34, 1)
+      UI.RestColors(b)
       GameTooltip:Hide()
    end)
    b:SetScript("OnClick", onClick)
    return b
+end
+
+-- Ruhefarben eines Knopfes; ein ausgewaehlter (z. B. das bearbeitete Profil) behaelt
+-- seine Hervorhebung, wenn die Maus ihn verlaesst.
+function UI.RestColors(b)
+   if b.selected then
+      b:SetBackdropColor(0.16, 0.34, 0.46, 1)
+      b:SetBackdropBorderColor(0.35, 0.71, 0.91, 1)
+   else
+      b:SetBackdropColor(0.13, 0.15, 0.18, 1)
+      b:SetBackdropBorderColor(0.26, 0.29, 0.34, 1)
+   end
+end
+
+function UI.SetSelected(b, selected)
+   if not b then return end
+   b.selected = selected and true or false
+   UI.RestColors(b)
 end
 
 -- Knopf sperren oder freigeben. Gesperrte Knoepfe bleiben sichtbar und erklaeren

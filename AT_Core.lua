@@ -608,10 +608,11 @@ local function Help()
       "/at knoten            Zustand des Playerbot-Knotengraphen",
       "/at route             Stuetzpunkte der Carbonite-Route anzeigen",
       "/at profil            Profil wechseln (ohne Argument: Liste)",
+      "/at profil bearbeiten Profil-Editor oeffnen",
+      "/at profil reset <name|alle>  vorgegebene Profile auf den Standard",
       "/at bot               Playerbot-Steuerung an/aus",
       "/at erbstuecke        geschuetzte Erbstuecke anzeigen",
       "/at botan | botaus    Selbstmodus von Hand schalten",
-      "/at profile           eigene Profile bearbeiten",
       "/at selfon <befehl>   Befehl zum Einschalten des Selbstmodus",
       "/at selfoff <befehl>  Befehl zum Ausschalten",
       "/at karte <id>        WorldMapArea-ID erzwingen (0 = automatisch)",
@@ -675,9 +676,13 @@ SlashCmdList["AUTOTRAVEL"] = function(input)
          -- /at profil reset <name>   ein festes Profil auf den Standard
          -- /at profil reset alle     alle festen Profile
          local B = AT.Bot
+         local touched              -- hat sich am wirksamen Profil etwas geaendert?
          if arg == "" then
             AT.Warn("Welches Profil? '/at profil reset <name>' oder '/at profil reset alle'.")
+            return
          elseif arg == "alle" or arg == "all" then
+            local current = B.Current().key
+            touched = B.IsModified(current)
             B.ResetAllBuiltin()
             AT.Print("Alle vorgegebenen Profile sind wieder auf den Standardwerten.")
          else
@@ -689,10 +694,12 @@ SlashCmdList["AUTOTRAVEL"] = function(input)
                AT.Warn("Nur vorgegebene Profile lassen sich zuruecksetzen (eigene: 'Leeren' im Editor).")
                return
             end
+            touched = (key == B.Current().key) and B.IsModified(key)
             B.ResetBuiltin(key)
             AT.Print("Profil " .. B.BuiltinDefault(key).name .. " ist wieder auf den Standardwerten.")
          end
-         if B.IsRunning() then B.ApplyProfile() end
+         -- Dem Bot nur melden, was sich fuer ihn aendert.
+         if touched and B.IsRunning() then B.ApplyProfile() end
          if AT.ProfileEditor and AT.ProfileEditor.Refresh then AT.ProfileEditor.Refresh() end
          if AT.UI then AT.UI.Update() end
 

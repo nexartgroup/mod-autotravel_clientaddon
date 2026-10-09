@@ -88,14 +88,16 @@ B.Builtin = {
    },
    {
       key = "normal", name = "Normal",
-      desc = "Wehrt sich mit vollem Repertoire und pluendert Gegner.",
+      desc = "Wehrt sich mit vollem Repertoire und pluendert Gegner (ohne Ressourcen).",
       combat    = "+dps,+assist,+aoe,+avoid aoe,+heal,-grind",
       -- Frueher stand hier "-loot": das Profil nannte sich "Normal" und lootete
       -- nie. Die nc-Strategie "loot" nimmt die Beute auf, "ll normal" legt fest,
       -- was ("ll" kennt nur all/*, gray/g und disenchant; alles andere gilt als
       -- "normal"). Die laengere Wartezeit gibt dem Bot Zeit zum Looten, bevor
-      -- der Autopilot weiterlaeuft.
-      noncombat = "+loot,-grind,-new rpg,-follow,+food",
+      -- der Autopilot weiterlaeuft. "nc !" stellt "gather" (Beruferessourcen)
+      -- als Standard an; "-gather" haelt Normal bei der Beute von Gegnern, das
+      -- bleibt der Unterschied zu "Plus".
+      noncombat = "+loot,-gather,-grind,-new rpg,-follow,+food",
       extra = { "ll normal" },
       loot = true, grace = 7.0,
    },
@@ -237,6 +239,16 @@ function B.BuiltinOverride(key)
    return o
 end
 
+-- Eine Ueberschreibung, die den Standard nur wiederholt, wieder entfernen. Sonst
+-- bliebe sie als Schnappschuss liegen, und eine spaetere Aenderung des Standards
+-- erreichte dieses Profil nicht mehr. Rueckgabe: true, wenn etwas entfernt wurde.
+function B.NormalizeBuiltin(key)
+   if B.HasOverride(key) and not B.IsModified(key) then
+      return B.ResetBuiltin(key)
+   end
+   return false
+end
+
 function B.ResetBuiltin(key)
    if not B.IsBuiltinKey(key) then return false end
    B.Global().builtin[key] = nil
@@ -277,24 +289,29 @@ end
 -- Eigene Profile (kontoweit gespeichert)
 -- ---------------------------------------------------------------------------
 
+-- Der Platz eines eigenen Profils; beschaedigte Felder (von Hand bearbeitete
+-- SavedVariables) werden dabei in Ordnung gebracht.
 function B.CustomSlot(i)
    local g = B.Global()
-   g.custom[i] = g.custom[i] or {
-      name = "Eigenes " .. i,
-      combat = {},        -- ["dps"] = true
-      noncombat = {},
-      extra = "",
-      grace = 2.0,
-   }
-   return g.custom[i]
+   local c = g.custom[i]
+   if type(c) ~= "table" then
+      c = {}
+      g.custom[i] = c
+   end
+   if type(c.name) ~= "string" then c.name = "Eigenes " .. i end
+   if type(c.combat) ~= "table" then c.combat = {} end
+   if type(c.noncombat) ~= "table" then c.noncombat = {} end
+   if type(c.extra) ~= "string" then c.extra = "" end
+   if type(c.grace) ~= "number" then c.grace = 2.0 end
+   return c
 end
 
 function B.CustomUsed(i)
-   local c = B.Global().custom[i]
-   if not c then return false end
-   if next(c.combat or {}) ~= nil then return true end
-   if next(c.noncombat or {}) ~= nil then return true end
-   return (c.extra or "") ~= ""
+   if B.Global().custom[i] == nil then return false end
+   local c = B.CustomSlot(i)
+   if next(c.combat) ~= nil then return true end
+   if next(c.noncombat) ~= nil then return true end
+   return c.extra ~= ""
 end
 
 -- Aus einem eigenen Profil ein Profilobjekt bauen
@@ -513,8 +530,13 @@ end
 -- Profil anwenden
 -- ---------------------------------------------------------------------------
 
+-- Zaehlt die Anwendungen; der Editor verschickt eine Aenderung nur dann noch
+-- einmal, wenn seitdem nichts angewendet wurde (die Anwendung enthaelt sie schon).
+B.applyCount = 0
+
 function B.ApplyProfile()
    if not AT.GetBool("BotControl") then return end
+   B.applyCount = B.applyCount + 1
    local p = B.Current()
 
    B.Whisper("co !")
