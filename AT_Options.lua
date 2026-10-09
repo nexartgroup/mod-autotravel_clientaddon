@@ -312,6 +312,8 @@ local function Build()
          -- Frisch nachschlagen: das Profil kann seit dem Aufbau der Seite
          -- geaendert worden sein.
          local cur = AT.Bot.Find(p.key)
+         -- Ein geleertes eigenes Profil gibt es nicht mehr: Find liefert dann ein anderes.
+         if cur.key ~= p.key then cur = p end
          GameTooltip:AddLine(cur.name .. (cur.modified and "  (geaendert)" or ""))
          GameTooltip:AddLine(cur.desc, 0.7, 0.7, 0.7, true)
          GameTooltip:AddLine(" ")
@@ -332,7 +334,7 @@ local function Build()
    Advance(math.ceil(#AT.Bot.List() / 3) * 26 + 6)
 
    Note(c, "AutoTravel sendet selbst keinen Ausruestungs-, Talent- oder Handelsbefehl. " ..
-           "'new rpg' wird in jedem Profil abgeschaltet.", 20, y)
+           "'new rpg' ist in den vorgegebenen Profilen aus; wer es im Editor einschaltet, laesst den Bot questen.", 20, y)
    Advance(30)
 
    table.insert(widgets, Check(c, "Playerbot-Selbstmodus mitsteuern",

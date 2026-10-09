@@ -117,14 +117,22 @@ Erbstueck wieder an.
 Sechs vorgegebene Profile (Minimal, Aengstlich, Verteidigen, Normal, Aggressiv, Plus) und
 drei eigene. **Normal** lootet: es setzt `nc +loot` und `ll normal` und wartet nach dem Kampf
 7 s, damit der Bot die Beute aufnehmen kann, bevor der Autopilot weiterlaeuft. (Bis 11.0
-stand dort `-loot`, das Profil nannte sich Normal und lootete nie.) Minimal, Aengstlich und
+stand dort `-loot`, das Profil nannte sich Normal und lootete nie.) Normal sammelt dabei keine
+Berufsressourcen (`-gather`; `nc !` schaltet `gather` sonst von selbst an) -- das ist der
+Unterschied zu **Plus**. Wer Beute aufnimmt, kann auch Ausruestung bekommen, die der Bot
+anlegt, wenn sie besser ist; Erbstuecke schuetzt der Erbstueckschutz. Minimal, Aengstlich und
 Verteidigen lassen die Beute bewusst liegen.
 
 **Die vorgegebenen Profile sind aenderbar.** Unter *Interface -> AddOns -> AutoTravel ->
 Profile* (oder `/at profil bearbeiten`) waehlst du ein Profil und stellst Strategien,
 Zusatzbefehle und die Wartezeit nach dem Kampf ein. Geaenderte Profile tragen ein `*`.
 **Auf Standard zuruecksetzen** (oder `/at profil reset <name>`, `/at profil reset alle`)
-verwirft die Aenderungen; der Standard bleibt im Addon und geht nie verloren.
+verwirft die Aenderungen; der Standard bleibt im Addon und geht nie verloren. Ein geaendertes
+Profil behaelt seine Werte, auch wenn eine spaetere Version den Standard anpasst -- erst
+das Zuruecksetzen holt den neuen Standard. Stellst du alles von Hand auf den Standard
+zurueck, verschwindet die Aenderung von selbst. Die Wartezeit liegt zwischen 0,1 und 30 s
+(der Server liest 0 als "keine Vorgabe"); Wartezeit und Zusatzbefehle speichert die
+Eingabetaste.
 
 Jede Strategie eines vorgegebenen Profils hat **drei Zustaende**, ein Klick wechselt:
 *nicht gesetzt* (grau: es bleibt, was `co !` / `nc !` als Standard hinterlassen), *an* (`+`)

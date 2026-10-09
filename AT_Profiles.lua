@@ -35,6 +35,7 @@ local boxes = { combat = {}, noncombat = {} }
 local nameEdit, extraEdit, graceEdit
 local titleFs, descFs, nameLbl, useBtn, clearBtn, resetBtn, hintFs
 local selButtons = {}
+local MAX_LABEL = 14
 
 local WHITE = "Interface\\Buttons\\WHITE8X8"
 local WIDTH = 580
@@ -43,7 +44,9 @@ local COL_ON  = "|cff53d17a"
 local COL_OFF = "|cffe8654a"
 local COL_MOD = "|cffe8c44a"
 
-local MIN_GRACE, MAX_GRACE = 0, 30
+-- Der Server liest die Wartezeit in Millisekunden und behandelt 0 als "keine
+-- Vorgabe" (dann gilt AutoTravel.CombatGraceMs); 0 waere also keine Null-Pause.
+local MIN_GRACE, MAX_GRACE = 0.1, 30
 
 -- ---------------------------------------------------------------------------
 -- Zugriff auf das gerade gewaehlte Profil
@@ -91,17 +94,11 @@ end
 -- jedem Klick: jede Anwendung sind ein Dutzend Fluesternachrichten.
 
 local applyToken = 0
+local RefreshHeader         -- Titel und "Auf Standard"-Knopf; unten definiert
 
 local function RefreshSelectors()
    for _, e in ipairs(selButtons) do
-      local active = (e.kind == sel.kind and e.id == sel.id)
-      if active then
-         e.btn:SetBackdropColor(0.16, 0.34, 0.46, 1)
-         e.btn:SetBackdropBorderColor(0.35, 0.71, 0.91, 1)
-      else
-         e.btn:SetBackdropColor(0.13, 0.15, 0.18, 1)
-         e.btn:SetBackdropBorderColor(0.26, 0.29, 0.34, 1)
-      end
+      AT.UI.SetSelected(e.btn, e.kind == sel.kind and e.id == sel.id)
 
       local label
       if e.kind == "builtin" then
@@ -110,20 +107,31 @@ local function RefreshSelectors()
       else
          label = AT.Bot.CustomSlot(e.id).name or ("Eigenes " .. e.id)
       end
+      -- Der Knopf ist 104 px breit: lange Namen kuerzen.
+      if string.len(label) > MAX_LABEL then label = string.sub(label, 1, MAX_LABEL - 1) .. "." end
       e.btn.label:SetText(label)
    end
 end
 
 function P.MarkDirty()
-   local cur = AT.Bot.Current()
-   if cur.key == ProfileKey() and AT.Bot.IsRunning() then
+   local B = AT.Bot
+   -- Wieder auf den Standard gebracht? Dann keine Ueberschreibung zurueckbehalten.
+   if IsBuiltin() then B.NormalizeBuiltin(sel.id) end
+
+   local cur = B.Current()
+   if cur.key == ProfileKey() and B.IsRunning() then
       applyToken = applyToken + 1
-      local token = applyToken
+      local token, applied = applyToken, B.applyCount
       AT.After(1.0, function()
-         if token == applyToken and AT.Bot.IsRunning() then AT.Bot.ApplyProfile() end
+         -- Wurde inzwischen etwas angewendet (anderes Profil, Zuruecksetzen ...),
+         -- steckt diese Aenderung schon darin.
+         if token == applyToken and applied == B.applyCount and B.IsRunning() then
+            B.ApplyProfile()
+         end
       end)
    end
    RefreshSelectors()
+   if RefreshHeader then RefreshHeader() end
    if AT.UI then AT.UI.Update() end
 end
 
@@ -203,10 +211,15 @@ end
 local function FormatGrace(v)
    v = tonumber(v) or 2
    if v == math.floor(v) then return string.format("%d", v) end
-   return string.format("%.1f", v)
+   -- bis zu zwei Stellen, ohne angehaengte Nullen ("0.25", "1.5")
+   local s = string.format("%.2f", v)
+   s = string.gsub(s, "0+$", "")
+   return s
 end
 
-local function LoadSelection()
+-- Titelzeile und "Auf Standard"-Knopf: beides haengt davon ab, ob das feste
+-- Profil vom Standard abweicht, und aendert sich schon bei einem Klick.
+RefreshHeader = function()
    if not frame then return end
    local B = AT.Bot
    local v = View()
@@ -221,6 +234,20 @@ local function LoadSelection()
       end
    end
 
+   if resetBtn and builtin then
+      if B.IsModified(sel.id) then resetBtn:Enable() else resetBtn:Disable() end
+      if resetBtn.SetAlpha then resetBtn:SetAlpha(B.IsModified(sel.id) and 1 or 0.5) end
+   end
+end
+
+local function LoadSelection()
+   if not frame then return end
+   local B = AT.Bot
+   local v = View()
+   local builtin = IsBuiltin()
+
+   RefreshHeader()
+
    if descFs then
       descFs:SetText(v.desc or "")
       if builtin then descFs:Show() else descFs:Hide() end
@@ -232,10 +259,6 @@ local function LoadSelection()
    end
    if resetBtn then
       if builtin then resetBtn:Show() else resetBtn:Hide() end
-      if builtin then
-         if B.IsModified(sel.id) then resetBtn:Enable() else resetBtn:Disable() end
-         if resetBtn.SetAlpha then resetBtn:SetAlpha(B.IsModified(sel.id) and 1 or 0.5) end
-      end
    end
    if nameEdit and not builtin then nameEdit:SetText(v.name or "") end
 
@@ -257,7 +280,9 @@ local function LoadSelection()
       if builtin then
          hintFs:SetText("Grau: nicht gesetzt (bleibt, wie 'co !' und 'nc !' es hinterlassen), " ..
                         COL_ON .. "+|r an, " .. COL_OFF .. "-|r aus. Ein Klick wechselt zum naechsten Zustand. " ..
-                        "'Auf Standard' stellt die Werte aus dem Addon wieder her. " ..
+                        "'Auf Standard' stellt die Werte aus dem Addon wieder her; bis dahin behaelt das " ..
+                        "Profil seine Werte, auch wenn eine neue Version den Standard aendert. " ..
+                        "Wartezeit und Zusatzbefehle speichert die Eingabetaste. " ..
                         "Achtung: 'new rpg' laesst den Bot questen und dabei Ausruestung wechseln.")
       else
          hintFs:SetText("Enter speichert. Beim Anwenden wird jede Strategie ausdruecklich mit " ..
@@ -381,6 +406,7 @@ local function Build()
    nameEdit:SetPoint("TOPLEFT", 20, -194)
    nameEdit:SetWidth(200) nameEdit:SetHeight(20)
    nameEdit:SetAutoFocus(false)
+   nameEdit:SetMaxLetters(16)
    nameEdit:SetScript("OnEnterPressed", function()
       if IsBuiltin() then return end
       local cs = AT.Bot.CustomSlot(sel.id)
@@ -429,10 +455,10 @@ local function Build()
    -- Wartezeit nach dem Kampf
    local graceLbl = c:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
    graceLbl:SetPoint("TOPLEFT", 16, -230)
-   graceLbl:SetText("Wartezeit nach dem Kampf in Sekunden (der Bot kann in der Zeit looten)")
+   graceLbl:SetText("Wartezeit nach dem Kampf in Sekunden (der Bot kann looten)")
 
    graceEdit = CreateFrame("EditBox", "AutoTravelProfileGrace", c, "InputBoxTemplate")
-   graceEdit:SetPoint("TOPLEFT", 400, -226)
+   graceEdit:SetPoint("LEFT", graceLbl, "RIGHT", 12, 0)
    graceEdit:SetWidth(50) graceEdit:SetHeight(20)
    graceEdit:SetAutoFocus(false)
    graceEdit:SetScript("OnEnterPressed", function()
