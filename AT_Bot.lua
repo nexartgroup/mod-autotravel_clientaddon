@@ -88,10 +88,16 @@ B.Builtin = {
    },
    {
       key = "normal", name = "Normal",
-      desc = "Wehrt sich mit vollem Repertoire.",
+      desc = "Wehrt sich mit vollem Repertoire und pluendert Gegner.",
       combat    = "+dps,+assist,+aoe,+avoid aoe,+heal,-grind",
-      noncombat = "-grind,-new rpg,-loot,-follow,+food",
-      grace = 2.0,
+      -- Frueher stand hier "-loot": das Profil nannte sich "Normal" und lootete
+      -- nie. Die nc-Strategie "loot" nimmt die Beute auf, "ll normal" legt fest,
+      -- was ("ll" kennt nur all/*, gray/g und disenchant; alles andere gilt als
+      -- "normal"). Die laengere Wartezeit gibt dem Bot Zeit zum Looten, bevor
+      -- der Autopilot weiterlaeuft.
+      noncombat = "+loot,-grind,-new rpg,-follow,+food",
+      extra = { "ll normal" },
+      loot = true, grace = 7.0,
    },
    {
       key = "aggressiv", name = "Aggressiv",
@@ -116,15 +122,160 @@ B.Builtin = {
 
 B.CUSTOM_COUNT = 3
 
+-- Die Strategien, die feste Profile benutzen. "gather" (Beruferessourcen) gehoert
+-- nur hierher: eigene Profile setzen JEDE Flagge ausdruecklich, und ein neues
+-- "-gather" in schon gespeicherten eigenen Profilen waere eine stille Aenderung.
+B.BuiltinNonCombatFlags = {}
+for _, f in ipairs(B.NonCombatFlags) do table.insert(B.BuiltinNonCombatFlags, f) end
+table.insert(B.BuiltinNonCombatFlags, { "gather", "Beruferessourcen sammeln" })
+
+-- ---------------------------------------------------------------------------
+-- Feste Profile aendern und zuruecksetzen
+-- ---------------------------------------------------------------------------
+--
+-- Die festen Profile bleiben unveraendert im Code (B.Builtin). Was der Spieler
+-- aendert, liegt als Ueberschreibung kontoweit in AutoTravelGlobalDB.builtin[key]
+-- und ersetzt beim Anwenden das Profil; Zuruecksetzen loescht sie einfach.
+--
+-- Jede Strategie hat drei Zustaende: nicht gesetzt (nichts wird gesendet, es
+-- bleibt, was "co !" / "nc !" als Standard hinterlassen), an (+) und aus (-).
+-- Die festen Profile setzen bewusst nicht alles: "Normal" aendert nichts an
+-- "tank" oder "boost". Ein Editor mit nur zwei Zustaenden wuerde das beim ersten
+-- Speichern in ein ausdrueckliches "-tank" verwandeln.
+
+function B.Global()
+   if type(AutoTravelGlobalDB) ~= "table" then AutoTravelGlobalDB = {} end
+   if type(AutoTravelGlobalDB.custom) ~= "table" then AutoTravelGlobalDB.custom = {} end
+   if type(AutoTravelGlobalDB.builtin) ~= "table" then AutoTravelGlobalDB.builtin = {} end
+   return AutoTravelGlobalDB
+end
+
+-- "+dps,-aoe" -> { dps = true, aoe = false }
+function B.ParseFlags(text)
+   local t = {}
+   for tok in string.gmatch(text or "", "[^,]+") do
+      local sign, name = string.match(AT.trim(tok), "^([%+%-])%s*(.-)$")
+      if sign and name and name ~= "" then t[name] = (sign == "+") end
+   end
+   return t
+end
+
+-- Umkehrung, in der Reihenfolge der Liste. Strategien ausserhalb der Liste gehen
+-- verloren; ein Test prueft, dass alle festen Profile vollstaendig darin liegen.
+function B.FormatFlags(map, list)
+   local parts = {}
+   for _, f in ipairs(list) do
+      local st = map and map[f[1]]
+      if st ~= nil then table.insert(parts, (st and "+" or "-") .. f[1]) end
+   end
+   return table.concat(parts, ",")
+end
+
+function B.BuiltinDefault(key)
+   for _, p in ipairs(B.Builtin) do
+      if p.key == key then return p end
+   end
+   return nil
+end
+
+function B.IsBuiltinKey(key)
+   return B.BuiltinDefault(key) ~= nil
+end
+
+-- Gibt es eine gespeicherte Ueberschreibung (auch eine, die den Standard nur
+-- wiederholt)?
+function B.HasOverride(key)
+   return type(B.Global().builtin[key]) == "table"
+end
+
+local function SameFlags(a, b)
+   a, b = a or {}, b or {}
+   for k, v in pairs(a) do if b[k] ~= v then return false end end
+   for k, v in pairs(b) do if a[k] ~= v then return false end end
+   return true
+end
+
+-- Weicht das Profil wirklich vom Standard ab? Eine Ueberschreibung, die alle
+-- Werte des Standards wiederholt, zaehlt nicht: sie wird wie der Standard
+-- behandelt und nicht als "geaendert" angezeigt.
+function B.IsModified(key)
+   local d = B.BuiltinDefault(key)
+   if not d or not B.HasOverride(key) then return false end
+   local o = B.BuiltinOverride(key)         -- bringt beschaedigte Felder in Ordnung
+
+   if not SameFlags(o.combat, B.ParseFlags(d.combat)) then return true end
+   if not SameFlags(o.noncombat, B.ParseFlags(d.noncombat)) then return true end
+
+   local dx = table.concat(d.extra or {}, "; ")
+   local ox = table.concat(B.SplitExtra(type(o.extra) == "string" and o.extra or ""), "; ")
+   if ox ~= dx then return true end
+
+   if (tonumber(o.grace) or d.grace) ~= (d.grace or 2.0) then return true end
+   return false
+end
+
+-- Ueberschreibung holen; gibt es noch keine, wird sie aus den Standardwerten
+-- aufgebaut. Rueckgabe nil fuer einen unbekannten Schluessel.
+function B.BuiltinOverride(key)
+   local d = B.BuiltinDefault(key)
+   if not d then return nil end
+   local g = B.Global()
+   local o = g.builtin[key]
+   if type(o) ~= "table" then
+      o = {
+         combat    = B.ParseFlags(d.combat),
+         noncombat = B.ParseFlags(d.noncombat),
+         extra     = table.concat(d.extra or {}, "; "),
+         grace     = d.grace or 2.0,
+      }
+      g.builtin[key] = o
+   end
+   if type(o.combat) ~= "table" then o.combat = {} end
+   if type(o.noncombat) ~= "table" then o.noncombat = {} end
+   if type(o.extra) ~= "string" then o.extra = "" end
+   if type(o.grace) ~= "number" then o.grace = d.grace or 2.0 end
+   return o
+end
+
+function B.ResetBuiltin(key)
+   if not B.IsBuiltinKey(key) then return false end
+   B.Global().builtin[key] = nil
+   return true
+end
+
+function B.ResetAllBuiltin()
+   B.Global().builtin = {}
+end
+
+-- Zusatzbefehle "a; b" -> { "a", "b" }
+local function SplitExtra(text)
+   local out = {}
+   for line in string.gmatch(text or "", "[^;\n]+") do
+      line = AT.trim(line)
+      if line ~= "" then table.insert(out, line) end
+   end
+   return out
+end
+B.SplitExtra = SplitExtra
+
+-- Das wirksame Profil: Standard, bei Aenderung mit der Ueberschreibung.
+local function ResolveBuiltin(p)
+   if not B.IsModified(p.key) then return p end
+   local o = B.BuiltinOverride(p.key)
+
+   local q = {}
+   for k, v in pairs(p) do q[k] = v end
+   q.combat    = B.FormatFlags(o.combat, B.CombatFlags)
+   q.noncombat = B.FormatFlags(o.noncombat, B.BuiltinNonCombatFlags)
+   q.extra     = SplitExtra(o.extra)
+   q.grace     = tonumber(o.grace) or p.grace
+   q.modified  = true
+   return q
+end
+
 -- ---------------------------------------------------------------------------
 -- Eigene Profile (kontoweit gespeichert)
 -- ---------------------------------------------------------------------------
-
-function B.Global()
-   AutoTravelGlobalDB = AutoTravelGlobalDB or {}
-   AutoTravelGlobalDB.custom = AutoTravelGlobalDB.custom or {}
-   return AutoTravelGlobalDB
-end
 
 function B.CustomSlot(i)
    local g = B.Global()
@@ -163,7 +314,7 @@ end
 -- Vollstaendige Liste: feste Profile plus benutzte eigene
 function B.List()
    local out = {}
-   for _, p in ipairs(B.Builtin) do table.insert(out, p) end
+   for _, p in ipairs(B.Builtin) do table.insert(out, ResolveBuiltin(p)) end
    for i = 1, B.CUSTOM_COUNT do
       if B.CustomUsed(i) then table.insert(out, CustomProfile(i)) end
    end
@@ -177,7 +328,7 @@ function B.Find(key)
    for _, p in ipairs(B.List()) do
       if p.key == key then return p end
    end
-   return B.Builtin[3]        -- Verteidigen
+   return ResolveBuiltin(B.Builtin[3])        -- Verteidigen
 end
 
 function B.Current()
@@ -391,8 +542,8 @@ function B.ApplyProfile()
          end
       end
    else
-      if p.combat    then B.Whisper("co " .. p.combat) end
-      if p.noncombat then B.Whisper("nc " .. p.noncombat) end
+      if p.combat and p.combat ~= "" then B.Whisper("co " .. p.combat) end
+      if p.noncombat and p.noncombat ~= "" then B.Whisper("nc " .. p.noncombat) end
       if p.extra then
          for _, e in ipairs(p.extra) do B.Whisper(e) end
       end
@@ -461,7 +612,8 @@ function B.PrintProfiles()
    AT.Print("Verfuegbare Profile:")
    local cur = AT.Get("Profile")
    for _, p in ipairs(B.List()) do
-      DEFAULT_CHAT_FRAME:AddMessage(string.format("   %s%-14s|r %s",
-         (p.key == cur) and "|cff53d17a" or "|cffaaaaaa", p.name, p.desc))
+      DEFAULT_CHAT_FRAME:AddMessage(string.format("   %s%-14s|r %s%s",
+         (p.key == cur) and "|cff53d17a" or "|cffaaaaaa", p.name .. (p.modified and " *" or ""),
+         p.desc, p.modified and "  (geaendert, '/at profil reset " .. p.key .. "')" or ""))
    end
 end
