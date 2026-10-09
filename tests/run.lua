@@ -965,6 +965,272 @@ test("SetMap: bestaetigt die Karte und kommt mit um eins verschobenem SetMapByID
 end)
 
 -- ---------------------------------------------------------------------------
+-- Profile: Normal lootet, feste Profile aenderbar und rücksetzbar
+-- ---------------------------------------------------------------------------
+
+local function whispers()
+   local out = {}
+   for _, x in ipairs(W.sent) do if x.channel == "WHISPER" then out[#out + 1] = x.text end end
+   return out
+end
+
+local function hasWhisper(text)
+   for _, t in ipairs(whispers()) do if t == text then return true end end
+   return false
+end
+
+local function anyWhisperMatches(pat)
+   for _, t in ipairs(whispers()) do if t:find(pat, 1, true) then return true end end
+   return false
+end
+
+local function flagBox(kind, flag)
+   for i = 1, 300 do
+      local cb = _G["AutoTravelFlagBox" .. i]
+      if not cb then break end
+      if cb.kind == kind and cb.flag == flag then return cb end
+   end
+end
+
+local function click(widget) widget.__scripts.OnClick(widget) end
+
+local function enter(editName, text)
+   local eb = _G[editName]
+   eb:SetText(text)
+   eb.__scripts.OnEnterPressed(eb)
+end
+
+test("Profil Normal lootet: +loot und ll normal, keine -loot-Strategie, Wartezeit zum Looten", function()
+   ready()
+   local B = AutoTravel.Bot
+   AutoTravel.Set("Profile", "normal")
+   B.ApplyProfile()
+   W.Advance(10)
+   check(hasWhisper("nc +loot,-grind,-new rpg,-follow,+food"), "nc setzt +loot")
+   check(hasWhisper("ll normal"), "ll normal wird gesendet")
+   check(not anyWhisperMatches("-loot"), "nirgends -loot")
+   check(W.SentContains(".at set grace 7"), "Wartezeit 7 s, damit der Bot looten kann")
+end)
+
+test("Profile, die nicht looten sollen, tun es weiter nicht", function()
+   ready()
+   for _, key in ipairs({ "minimal", "aengstlich", "verteidigen" }) do
+      local p = AutoTravel.Bot.Find(key)
+      check(p.noncombat:find("-loot", 1, true) ~= nil, key .. " bleibt bei -loot")
+   end
+end)
+
+test("jede Strategie der festen Profile ist im Editor vertreten (Umwandlung geht nichts verloren)", function()
+   boot()
+   local B = AutoTravel.Bot
+   local function count(s) local n = 0 for _ in s:gmatch("[^,]+") do n = n + 1 end return n end
+   for _, d in ipairs(B.Builtin) do
+      local c = B.FormatFlags(B.ParseFlags(d.combat), B.CombatFlags)
+      local n = B.FormatFlags(B.ParseFlags(d.noncombat), B.BuiltinNonCombatFlags)
+      eq(count(c), count(d.combat), d.key .. ": Kampfstrategien vollstaendig")
+      eq(count(n), count(d.noncombat), d.key .. ": Nichtkampfstrategien vollstaendig")
+   end
+   -- "gather" gibt es nur fuer feste Profile, die eigenen bleiben unveraendert
+   local found = false
+   for _, f in ipairs(B.NonCombatFlags) do if f[1] == "gather" then found = true end end
+   check(not found, "eigene Profile bekommen keine neue Flagge (stille Aenderung vermieden)")
+end)
+
+test("feste Profile: Aenderung wirkt, Zuruecksetzen stellt den Standard wieder her", function()
+   ready()
+   local B = AutoTravel.Bot
+   local default = B.Find("normal").noncombat
+   check(not B.IsModified("normal"), "zunaechst unveraendert")
+
+   local o = B.BuiltinOverride("normal")
+   o.noncombat["loot"] = false
+   o.extra = ""
+   check(B.IsModified("normal"), "jetzt geaendert")
+   local p = B.Find("normal")
+   check(p.noncombat:find("-loot", 1, true) ~= nil, "die Aenderung ist wirksam")
+   eq(#p.extra, 0, "Zusatzbefehle entfernt")
+   check(p.modified == true, "als geaendert gekennzeichnet")
+
+   AutoTravel.Set("Profile", "normal")
+   B.ApplyProfile()
+   W.Advance(10)
+   check(anyWhisperMatches("-loot"), "der Bot bekommt die geaenderte Fassung")
+
+   check(B.ResetBuiltin("normal"), "Zuruecksetzen")
+   check(not B.HasOverride("normal"), "Ueberschreibung ist weg")
+   eq(B.Find("normal").noncombat, default, "Standardwert wieder da")
+   check(B.Find("normal").modified == nil, "nicht mehr geaendert")
+   eq(B.ResetBuiltin("gibtsnicht"), false, "unbekanntes Profil")
+   eq(B.ResetBuiltin("custom1"), false, "eigene Profile lassen sich so nicht zuruecksetzen")
+end)
+
+test("eine Ueberschreibung, die den Standard wiederholt, gilt nicht als geaendert", function()
+   ready()
+   local B = AutoTravel.Bot
+   B.BuiltinOverride("verteidigen")                -- legt sie an, aendert nichts
+   check(B.HasOverride("verteidigen"), "Ueberschreibung vorhanden")
+   check(not B.IsModified("verteidigen"), "aber nicht geaendert")
+   check(B.Find("verteidigen") == B.BuiltinDefault("verteidigen"), "es gilt der Standard selbst")
+end)
+
+test("Editor: eine Strategie hat drei Zustaende, nicht gesetzte bleiben unangetastet", function()
+   ready()
+   local B = AutoTravel.Bot
+   check(AutoTravel.ProfileEditor.Select("builtin", "normal"), "Normal gewaehlt")
+
+   local tank = flagBox("combat", "tank")           -- Normal setzt "tank" nicht
+   check(tank ~= nil, "Kaestchen vorhanden")
+   check(not B.HasOverride("normal"), "Anzeigen allein legt nichts an")
+   check(tank.text:GetText() == "|cff8a92a3tank|r", "grau = nicht gesetzt")
+
+   click(tank)
+   eq(B.BuiltinOverride("normal").combat.tank, true, "erster Klick: an")
+   check(tank.text:GetText():find("+", 1, true) ~= nil, "Anzeige +tank")
+   click(tank)
+   eq(B.BuiltinOverride("normal").combat.tank, false, "zweiter Klick: aus")
+   check(tank.text:GetText():find("-", 1, true) ~= nil, "Anzeige -tank")
+   click(tank)
+   eq(B.BuiltinOverride("normal").combat.tank, nil, "dritter Klick: wieder nicht gesetzt")
+   check(not B.IsModified("normal"), "zurueck beim Standard")
+
+   -- was das Profil schon setzt, bleibt erhalten, wenn man etwas anderes aendert
+   local boost = flagBox("combat", "boost")
+   click(boost)
+   check(B.Find("normal").combat:find("+dps", 1, true) ~= nil, "+dps ist noch da")
+   check(B.Find("normal").combat:find("tank", 1, true) == nil, "tank wurde nie gesendet")
+   check(B.Find("normal").combat:find("+boost", 1, true) ~= nil, "+boost neu")
+end)
+
+test("Editor: Zuruecksetzen ueber die Oberflaeche und die Anzeige der Aenderung", function()
+   ready()
+   local B = AutoTravel.Bot
+   AutoTravel.ProfileEditor.Select("builtin", "plus")
+   local gather = flagBox("noncombat", "gather")
+   check(gather.__shown ~= false, "gather ist bei festen Profilen sichtbar")
+   click(gather)                                    -- Plus hat +gather: an -> aus
+   check(B.IsModified("plus"), "Plus geaendert")
+   check(B.Find("plus").noncombat:find("-gather", 1, true) ~= nil, "-gather wirksam")
+
+   check(AutoTravel.ProfileEditor.ResetSelected(), "zuruecksetzen")
+   check(not B.IsModified("plus"), "Plus wieder Standard")
+   check(B.Find("plus").noncombat:find("+gather", 1, true) ~= nil, "+gather wieder da")
+   eq(AutoTravel.ProfileEditor.ResetSelected(), true, "mehrfach ist harmlos")
+
+   AutoTravel.ProfileEditor.Select("custom", 1)
+   eq(AutoTravel.ProfileEditor.ResetSelected(), false, "bei einem eigenen Profil kein Zuruecksetzen")
+end)
+
+test("Editor: eigene Profile arbeiten mit zwei Zustaenden wie bisher", function()
+   ready()
+   local B = AutoTravel.Bot
+   AutoTravel.ProfileEditor.Select("custom", 1)
+   local dps = flagBox("combat", "dps")
+   dps:SetChecked(true)
+   click(dps)
+   eq(B.CustomSlot(1).combat.dps, true, "angehakt = an")
+   dps:SetChecked(false)
+   click(dps)
+   eq(B.CustomSlot(1).combat.dps, nil, "abgewaehlt = nicht gesetzt")
+   check(flagBox("noncombat", "gather").__shown == false, "gather bleibt bei eigenen Profilen verborgen")
+   eq(B.HasOverride("normal"), false, "feste Profile nicht beruehrt")
+end)
+
+test("Editor: Wartezeit und Zusatzbefehle werden gespeichert und geprueft", function()
+   ready()
+   local B = AutoTravel.Bot
+   AutoTravel.ProfileEditor.Select("builtin", "normal")
+
+   enter("AutoTravelProfileGrace", "12,5")
+   eq(B.Find("normal").grace, 12.5, "Komma als Dezimaltrenner")
+   enter("AutoTravelProfileGrace", "99")
+   eq(B.Find("normal").grace, 30, "nach oben begrenzt")
+   enter("AutoTravelProfileGrace", "-4")
+   eq(B.Find("normal").grace, 0, "nach unten begrenzt")
+   enter("AutoTravelProfileGrace", "abc")
+   eq(B.Find("normal").grace, 0, "Unsinn aendert nichts")
+   local warned = false
+   for _, m in ipairs(W.messages) do if m:find("Wartezeit", 1, true) and m:find("Zahl", 1, true) then warned = true end end
+   check(warned, "Hinweis bei ungueltiger Eingabe")
+
+   enter("AutoTravelProfileExtra", "ll normal; ll skill ;; ")
+   local p = B.Find("normal")
+   eq(#p.extra, 2, "zwei Zusatzbefehle")
+   eq(p.extra[2], "ll skill", "Leerraum entfernt")
+
+   AutoTravel.ProfileEditor.ResetSelected()
+   eq(B.Find("normal").grace, 7.0, "Wartezeit wieder Standard")
+   eq(B.Find("normal").extra[1], "ll normal", "Zusatzbefehl wieder Standard")
+end)
+
+test("Editor: Neuanwendung beim Bearbeiten gebuendelt statt bei jedem Klick", function()
+   ready()
+   local B = AutoTravel.Bot
+   W.ServerLine("SelfBot is now active.")
+   W.Advance(5)
+   AutoTravel.Set("Profile", "normal")
+   AutoTravel.ProfileEditor.Select("builtin", "normal")
+   W.ClearSent()
+   click(flagBox("combat", "tank"))
+   click(flagBox("combat", "tank"))
+   click(flagBox("combat", "boost"))
+   W.Advance(0.5)
+   eq(#whispers(), 0, "noch nichts gesendet")
+   W.Advance(5)
+   local resets = 0
+   for _, t in ipairs(whispers()) do if t == "co !" then resets = resets + 1 end end
+   eq(resets, 1, "genau eine Neuanwendung")
+
+   -- ein anderes als das aktive Profil loest nichts aus
+   W.ClearSent()
+   AutoTravel.ProfileEditor.Select("builtin", "minimal")
+   click(flagBox("combat", "tank"))
+   W.Advance(5)
+   eq(#whispers(), 0, "anderes Profil bearbeitet: nichts gesendet")
+end)
+
+test("/at profil reset und /at profil bearbeiten", function()
+   ready()
+   local B = AutoTravel.Bot
+   local o = B.BuiltinOverride("normal")
+   o.noncombat["loot"] = false
+   o = B.BuiltinOverride("plus")
+   o.noncombat["gather"] = false
+
+   SlashCmdList["AUTOTRAVEL"]("profil reset normal")
+   check(not B.IsModified("normal"), "Normal zurueckgesetzt")
+   check(B.IsModified("plus"), "Plus unberuehrt")
+
+   SlashCmdList["AUTOTRAVEL"]("profil reset gibtsnicht")
+   SlashCmdList["AUTOTRAVEL"]("profil reset")
+   check(B.IsModified("plus"), "ungueltige Eingaben aendern nichts")
+
+   SlashCmdList["AUTOTRAVEL"]("profil reset alle")
+   check(not B.IsModified("plus"), "alle zurueckgesetzt")
+   eq(next(B.Global().builtin), nil, "keine Ueberschreibungen mehr")
+
+   local ok, err = pcall(SlashCmdList["AUTOTRAVEL"], "profil bearbeiten")
+   check(ok, "bearbeiten oeffnet den Editor: " .. tostring(err))
+   -- die Auswahl per Namen funktioniert weiter
+   SlashCmdList["AUTOTRAVEL"]("profil Plus")
+   eq(AutoTravel.Get("Profile"), "plus", "Auswahl unveraendert")
+end)
+
+test("kaputte gespeicherte Profile bringen nichts zum Absturz", function()
+   W.Install()
+   _G.AutoTravelGlobalDB = { builtin = "kaputt", custom = 5 }
+   W.LoadToc(".", "AutoTravel.toc")
+   W.Fire("ADDON_LOADED", "AutoTravel")
+   W.Fire("PLAYER_LOGIN")
+   local B = AutoTravel.Bot
+   eq(#B.List(), #B.Builtin, "nur die festen Profile")
+   _G.AutoTravelGlobalDB.builtin = { normal = "unsinn", plus = { combat = 7, noncombat = "x", extra = 3, grace = "viel" } }
+   local p = B.Find("plus")
+   check(p ~= nil and type(p.combat) == "string", "Plus bleibt benutzbar")
+   B.ApplyProfile()
+   check(true, "Anwenden ohne Fehler")
+end)
+
+-- ---------------------------------------------------------------------------
 -- Diagnose
 -- ---------------------------------------------------------------------------
 
