@@ -268,7 +268,7 @@ local function BuildPanel()
       end
       GameTooltip:AddLine(" ")
       GameTooltip:AddLine("Klicken wechselt das Profil", 0.91, 0.77, 0.29)
-      GameTooltip:AddLine("Eigene Profile: /at profile", 0.6, 0.62, 0.66)
+      GameTooltip:AddLine("Profile bearbeiten: /at profil bearbeiten", 0.6, 0.62, 0.66)
    end
    f.prof = prof
 
