@@ -360,7 +360,6 @@ wdFrame:SetScript("OnUpdate", function()
          if needStatus then
             AT.Warn("Keine Statusmeldung vom Server auf den Start. Verbindung pruefen; " ..
                     "'/at hello' fragt das Modul erneut ab.")
-            AT.pendingStartAt = nil
             AT.active = false
             AT.status.state = "IDLE"
             if AT.UI then AT.UI.Update() end
@@ -417,6 +416,9 @@ function AT.Start()
    -- (siehe AT.BeginTripSupport). Eine Absage -- etwa "keine Verbindung ueber die
    -- Kartengrenze" -- soll den Bot nicht trotzdem einschalten.
    AT.pendingStartAt = GetTime()
+   -- Der Erbstueck-Schnappschuss gehoert an den Klick, nicht an die Antwort: die
+   -- Ueberwachung ist ab AT.active scharf und soll nicht mit einem alten Stand arbeiten.
+   if AT.Gear then AT.Gear.Start() end
    if AT.UI then AT.UI.Update() end
    if N.IsReady() then Watchdog(true) end
 end
@@ -430,9 +432,11 @@ local START_WINDOW = 30
 -- einschalten. Wird vom Statusempfang aufgerufen, nicht beim Klick.
 function AT.BeginTripSupport()
    AT.pendingStartAt = nil
-   AT.supportOn = true
+   -- Nur wenn Bot.Enable wirklich etwas tut: mit abgeschalteter Playerbot-Steuerung
+   -- kehrt es sofort zurueck, und ein spaeteres Disable (Umschalter!) wuerde den Bot
+   -- dann EINschalten.
+   AT.supportOn = AT.GetBool("BotControl")
    if AT.Bot then AT.Bot.Enable() end
-   if AT.Gear then AT.Gear.Start() end
 end
 
 -- true, solange ein gesendeter Start auf seine Annahme wartet
@@ -448,11 +452,14 @@ function AT.Stop()
    -- waehrend der Autopilot loslief.
    N.DropTag("start")
    AT.pendingStartAt = nil
+   -- Disable ist ein Umschalter: nur ausschalten, was diese Reise eingeschaltet hat.
+   -- Ein Stop vor der Antwort des Servers hat nichts eingeschaltet.
+   local hadSupport = AT.supportOn
    AT.supportOn = false
    AT.SendNow("at stop", "stop")
    AT.active = false
    AT.status.state = "IDLE"
-   if AT.Bot and AT.GetBool("AutoDisableBot") then AT.Bot.Disable() end
+   if hadSupport and AT.Bot and AT.GetBool("AutoDisableBot") then AT.Bot.Disable() end
    if AT.UI then AT.UI.Update() end
 end
 
