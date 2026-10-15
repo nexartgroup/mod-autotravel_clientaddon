@@ -35,7 +35,7 @@ local AT = AutoTravel
 local CB = AT.Carb
 local N  = AT.Net
 
-AT.VERSION = "11.2"
+AT.VERSION = "11.3"
 local PREFIX = "|cff33ccffAutoTravel|r: "
 
 -- Anzeigenamen fuer Optionen -> Tastaturbelegung (siehe Bindings.xml).
@@ -204,15 +204,39 @@ end
 -- Ziel bestimmen
 -- ---------------------------------------------------------------------------
 
+-- Das Label (Carbonites Text zum Ziel) geht an den Server. Dort zeigt es das Panel an, und
+-- der Server vergleicht es mit den englischen NPC-Namen der Datenbank, um den Zielort
+-- genau zu finden (siehe mod-autotravel, "Zielanker"). Es muss deshalb ein sauberer Text
+-- sein: Carbonite-Texte tragen Farbcodes, Links und Texturen, und '|' darf nicht
+-- ins Chatprotokoll.
+local LABEL_MAX = 64       -- Bytes
+
+-- Schneidet auf hoechstens 'max' Bytes, nie mitten in einem UTF-8-Zeichen.
+local function cutUtf8(s, max)
+   if string.len(s) <= max then return s end
+   local cut = max
+   -- das erste weggelassene Byte darf kein Folgebyte (10xxxxxx) sein
+   while cut > 0 do
+      local b = string.byte(s, cut + 1)
+      if b and b >= 0x80 and b < 0xC0 then cut = cut - 1 else break end
+   end
+   return string.sub(s, 1, cut)
+end
+
 local function sanitize(name)
    if type(name) ~= "string" then return "Ziel" end
+   name = string.gsub(name, "|c%x%x%x%x%x%x%x%x", "")      -- Farbcode
+   name = string.gsub(name, "|r", "")
+   name = string.gsub(name, "|H[^|]*|h%[?", "")             -- Linkanfang: der Text steht dahinter
+   name = string.gsub(name, "%]?|h", "")                    -- Linkende
+   name = string.gsub(name, "|T[^|]*|t", "")                -- Textur
    name = string.gsub(name, "|", "")
    name = string.gsub(name, "%s+", " ")
    name = AT.trim(name)
    if name == "" then return "Ziel" end
-   if string.len(name) > 40 then name = string.sub(name, 1, 40) end
-   return name
+   return cutUtf8(name, LABEL_MAX)
 end
+AT.SanitizeLabel = sanitize
 
 -- Rueckgabe: args-String fuer das Servermodul, Anzeigename
 --        oder nil, Fehlertext
@@ -279,8 +303,16 @@ function AT.BuildRoute()
          local ny = math.max(0, math.min(100, zy)) / 100
          local prev = out[#out]
          -- Punkte, die praktisch aufeinander liegen, zusammenfassen
-         if not (prev and prev.map == uiMapId
-                 and math.abs(prev.nx - nx) < 0.004 and math.abs(prev.ny - ny) < 0.004) then
+         if prev and prev.map == uiMapId
+            and math.abs(prev.nx - nx) < 0.004 and math.abs(prev.ny - ny) < 0.004 then
+            -- Der LETZTE Punkt ist das Ziel und darf nicht wegfallen: er ersetzt den vorigen.
+            -- Sonst wuerde das Ziel still auf den Zwischenpunkt davor verschoben (bis zu 7 yd
+            -- auf einer Stadtkarte, 24 yd auf einer Zonenkarte), und der Server fande den
+            -- NPC am Ziel nicht.
+            if i == #legs then
+               prev.nx, prev.ny, prev.name = nx, ny, l.name
+            end
+         else
             table.insert(out, { map = uiMapId, nx = nx, ny = ny,
                                 flag = l.taxi and 1 or 0, name = l.name })
          end

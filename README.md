@@ -104,6 +104,25 @@ Die Pruefung bleibt beim Server; die gesperrten Knoepfe sind nur Komfort.
 | `/at karte <id>`, `/at karten` | Karten-ID erzwingen / Kartentabelle neu aufbauen |
 | `/at optionen`, `/at panel`, `/at knopf`, `/at debug` | Oberflaeche und Diagnose |
 
+## Ziel: Name und Zielanker
+
+Das Addon schickt dem Server zum Ziel nur Kartenkoordinaten (x/y) und das **Label**, das
+Carbonite dazu anzeigt -- bei einem NPC dessen Name, bei einem Questziel der Name oder Text
+des Ziels. Carbonite zeigt ihn **englisch**, auch wenn der Client deutsch ist ("High Chief
+Stillpine" statt "Oberhaeuptling der Tannenruhfeste"); der Server vergleicht ihn deshalb mit
+den englischen Namen seiner Datenbank. Eine Hoehe (Z) gibt es im Client nicht. Wo mehrere
+Etagen uebereinanderliegen (die Exodar liegt rund 130 yd *unter* dem Gelaende darueber),
+legt der Server die Etage fest: ist das Ziel ein NPC, ein Objekt oder ein Questziel, nimmt
+er dessen Spawnposition (Servermodul 4.0.6, "Zielanker"). Am Protokoll aendert das nichts.
+
+Seit 11.3 geht das Label sauber hinaus: Farbcodes (`|cffff0000...|r`), Links
+(`|Hquest:...|h[Titel]|h`) und Texturen werden entfernt, der Text bleibt, und die Kuerzung auf
+64 Bytes schneidet kein UTF-8-Zeichen durch (vorher blieben Reste wie `cffff0000Bankr`, und
+Umlaute konnten halbiert werden). Ausserdem verwirft die Route ihren **letzten Punkt** nicht
+mehr, wenn er auf dem vorigen liegt: der letzte Punkt ist das Ziel und ersetzt den vorigen
+(vorher wurde das Ziel still auf den Zwischenpunkt davor verschoben -- bis zu 7 yd auf einer
+Stadtkarte, 24 yd auf einer Zonenkarte).
+
 ## Playerbot-Selbstmodus
 
 Optional steuert das Addon den Selbstmodus von mod-playerbots mit (Profile wie
