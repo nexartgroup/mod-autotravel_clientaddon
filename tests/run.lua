@@ -623,6 +623,7 @@ test("Einzelziel: .at start mit allen Parametern und bereinigtem Namen", functio
       eq(fields[6], "1", "Gegenprobe vorhanden")
       check(not start:find("|", 1, true), "kein '|' im Befehl (Farbcodes entfernt)")
       check(start:find("Sturmwind", 1, true) ~= nil, "Name bleibt erkennbar")
+      check(start:sub(-15) == " Sturmwind Bank", "der Name ist sauber: ohne Reste des Farbcodes (war: Sturmwind cffff0000Bankr)")
    end
    eq(AutoTravel.active, true, "Reise gilt als aktiv")
 end)
@@ -651,6 +652,91 @@ test("Route: Aufteilung in Chatnachrichten und .at rstart", function()
       if c:sub(1, 10) == ".at rstart" then iR = i end
    end
    check(iR > lastRoute, "rstart nach der letzten Routennachricht")
+end)
+
+test("Label: Farbcodes, Links und Texturen werden entfernt, der Text bleibt (der Server vergleicht ihn mit NPC-Namen)", function()
+   boot()
+   local L = AutoTravel.SanitizeLabel
+   eq(L("Ganaar"), "Ganaar", "einfacher Name")
+   eq(L("High Chief Stillpine"), "High Chief Stillpine", "englischer Name wie in Carbonite")
+   eq(L("Sturmwind |cffff0000Bank|r"), "Sturmwind Bank", "Farbcode")
+   eq(L("|cff00ff00|Hquest:123:80|h[Die Suche nach dem Lehrer]|h|r"), "Die Suche nach dem Lehrer", "Questlink: der Text in den Klammern")
+   eq(L("Quest |Hitem:6256:0:0:0:0:0:0:0:80|h[Angel]|h abgeben"), "Quest Angel abgeben", "Link mitten im Text")
+   eq(L("|TInterface\\Icons\\Trade_Fishing:16|t Angeln"), "Angeln", "Textur")
+   eq(L("  viel     Leerraum  "), "viel Leerraum", "Leerraum zusammengefasst")
+   eq(L(""), "Ziel", "leer")
+   eq(L("   "), "Ziel", "nur Leerraum")
+   eq(L("|r|r"), "Ziel", "nur Steuerzeichen")
+   eq(L(nil), "Ziel", "kein Text")
+   eq(L(42), "Ziel", "keine Zeichenkette")
+   check(not L("a|b|c"):find("|", 1, true), "kein '|' bleibt uebrig")
+end)
+
+test("Label: nie mitten in einem UTF-8-Zeichen abgeschnitten, hoechstens 64 Bytes", function()
+   boot()
+   local L = AutoTravel.SanitizeLabel
+   local function validUtf8(str)
+      local i, n = 1, #str
+      while i <= n do
+         local c = str:byte(i)
+         local len = (c < 0x80 and 1) or (c >= 0xC2 and c < 0xE0 and 2) or (c >= 0xE0 and c < 0xF0 and 3)
+                     or (c >= 0xF0 and c < 0xF5 and 4) or nil
+         if not len or i + len - 1 > n then return false end
+         for k = 1, len - 1 do
+            local b = str:byte(i + k)
+            if b < 0x80 or b >= 0xC0 then return false end
+         end
+         i = i + len
+      end
+      return true
+   end
+   local long = string.rep("a", 61) .. "\195\164\195\164\195\164"      -- ... dann drei Umlaute (je 2 Byte), Grenze liegt mitten im zweiten
+   local cut = L(long)
+   check(#cut <= 64, "hoechstens 64 Bytes: " .. #cut)
+   check(validUtf8(cut), "gueltiges UTF-8 (kein halbes Zeichen am Ende)")
+   eq(cut, string.rep("a", 61) .. "\195\164", "ein ganzer Umlaut bleibt, der angeschnittene faellt weg")
+   local names = "Stallmeister M\195\188ller-L\195\182wenzahn der Gro\195\159e W\195\164chter von Sturmwind und Umgebung"
+   local c2 = L(names)
+   check(#c2 <= 64 and validUtf8(c2), "langer Name mit Umlauten bleibt gueltiges UTF-8")
+   check(not validUtf8(string.sub(long, 1, 64)), "Gegenprobe: ein roher Schnitt an dieser Stelle waere ungueltig")
+   eq(#L(string.rep("x", 64)), 64, "genau 64 Bytes bleiben")
+   eq(#L(string.rep("x", 65)), 64, "65 werden auf 64 gekuerzt")
+end)
+
+test("Route: der letzte Punkt (das Ziel) geht nicht verloren, auch wenn er auf dem vorigen liegt", function()
+   ready()
+   installCarbonite(1)
+   -- drei Punkte; die letzten beiden liegen praktisch aufeinander (Unterschied weit unter 0.004)
+   local tra = {
+      { TMX = 1, TMY = 2, MaI = 1, TaN1 = "Start" },
+      { TMX = 10, TMY = 20, MaI = 1, TaN1 = "Zwischenpunkt" },
+      { TMX = 10.001, TMY = 20.001, MaI = 1, TaN1 = "Ganaar" },
+   }
+   _G.Nx.Map.GeM = function()
+      return {
+         Tra1 = tra, Tar = {}, PlX = 1, PlY = 1,
+         GZP = function(self, mi, x, y) return 10 + x * 2, 20 + y end,
+      }
+   end
+   AutoTravel.MapIds.Build(true)
+   local route = AutoTravel.BuildRoute()
+   check(route ~= nil and #route == 2, "zwei Punkte statt drei (der Zwischenpunkt fiel weg)")
+   if route and #route == 2 then
+      eq(route[2].name, "Ganaar", "der letzte Punkt traegt das Ziel")
+      check(math.abs(route[2].nx - (10 + 10.001 * 2) / 100) < 1e-9, "und seine Koordinaten, nicht die des Zwischenpunkts")
+      check(math.abs(route[2].nx - (10 + 10 * 2) / 100) > 1e-6, "nicht die des Zwischenpunkts")
+   end
+
+   -- liegt der NEUE Punkt nicht am Ziel, bleibt es beim alten Verhalten: der doppelte faellt weg
+   tra[#tra] = nil
+   tra[#tra + 1] = { TMX = 10.001, TMY = 20.001, MaI = 1, TaN1 = "doppelt" }
+   tra[#tra + 1] = { TMX = 30, TMY = 40, MaI = 1, TaN1 = "Ziel" }
+   local r2 = AutoTravel.BuildRoute()
+   check(r2 ~= nil and #r2 == 3, "ein Zwischenpunkt auf dem anderen wird weiterhin zusammengefasst")
+   if r2 and #r2 == 3 then
+      eq(r2[2].name, "Zwischenpunkt", "der erste von zwei Zwischenpunkten bleibt")
+      eq(r2[3].name, "Ziel", "das Ziel am Ende")
+   end
 end)
 
 test("PackRoute: kein Punkt geht verloren, jede Nachricht bleibt im Limit", function()
