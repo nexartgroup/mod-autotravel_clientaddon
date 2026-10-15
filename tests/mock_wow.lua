@@ -30,6 +30,11 @@ M.world = {
    mouse = {}, shift = false, ctrl = false, alt = false,
    casting = false, channel = false, chatOpen = false, onTaxi = false, vehicle = false,
    cursor = { 100, 100 }, cursorItem = false, shown = {},
+   focus = nil,                                   -- Frame unter der Maus (GetMouseFocus)
+   class = "WARRIOR", level = 80,                 -- UnitClass / UnitLevel
+   forms = {},                                    -- Gestalten { icon, name, active }
+   spells = {},                                   -- GetSpellInfo: [id] = { name, icon }
+   talents = { 0, 0, 0 },                         -- Punkte je Talentbaum
 }
 
 -- ---------------------------------------------------------------------------
@@ -84,6 +89,15 @@ function Obj.Disable(self) self.__enabled = false end
 function Obj.IsEnabled(self) return self.__enabled and 1 or nil end
 function Obj.SetAlpha(self, a) self.__alpha = a end
 function Obj.GetAlpha(self) return self.__alpha end
+function Obj.GetEffectiveAlpha(self) return self.__alpha end
+
+-- Maus: der Test setzt f.__over = true, wenn der Zeiger auf dem Frame liegt.
+function Obj.IsMouseOver(self) return self.__over == true end
+function Obj.IsMouseEnabled(self) return true end
+function Obj.IsVisible(self) return self.__shown end
+function Obj.GetParent(self) return self.__parent end
+function Obj.GetObjectType(self) return self.__kind end
+function Obj.GetFrameLevel(self) return 1 end
 
 function Obj.SetText(self, t) self.__text = tostring(t or "") end
 function Obj.GetText(self) return self.__text end
@@ -188,6 +202,9 @@ function M.Install()
       mouse = {}, shift = false, ctrl = false, alt = false,
       casting = false, channel = false, chatOpen = false, onTaxi = false, vehicle = false,
       cursor = { 100, 100 }, cursorItem = false, shown = {},
+      focus = nil,
+      class = "WARRIOR", level = 80,
+      forms = {}, spells = {}, talents = { 0, 0, 0 },
    }
 
    local W = M.world
@@ -234,6 +251,26 @@ function M.Install()
    _G.ChatEdit_GetActiveWindow = function() return W.chatOpen and {} or nil end
    _G.UnitOnTaxi = function() return W.onTaxi end
    _G.UnitHasVehicleUI = function() return W.vehicle end
+   _G.GetMouseFocus = function() return W.focus end
+   _G.MouseIsOver = function(f) return f ~= nil and f.__over == true end
+
+   -- Klasse, Stufe, Gestalten und Talente (Druidenerkennung des Bots)
+   _G.UnitClass = function() return W.class, W.class end
+   _G.UnitLevel = function() return W.level end
+   _G.GetNumShapeshiftForms = function() return #W.forms end
+   _G.GetShapeshiftFormInfo = function(i)
+      local f = W.forms[i]
+      if not f then return end
+      return f.icon, f.name, f.active and true or false, true
+   end
+   _G.GetSpellInfo = function(id)
+      local sp = W.spells[id]
+      if not sp then return end
+      return sp[1], "", sp[2]
+   end
+   _G.GetTalentTabInfo = function(i)
+      return "Baum " .. tostring(i), "Symbol", W.talents[i] or 0, "", 0
+   end
 
    -- Blizzard-Fenster: nur die, die der Test als offen markiert
    for _, n in ipairs({ "LootFrame", "MerchantFrame", "QuestFrame", "GossipFrame", "TaxiFrame",

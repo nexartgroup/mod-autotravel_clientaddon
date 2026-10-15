@@ -30,7 +30,10 @@ read_globals = {
    "GetTime", "UnitName", "UnitIsDeadOrGhost", "UnitAffectingCombat", "UnitCastingInfo",
    "UnitChannelInfo", "GetUnitSpeed", "IsFalling", "IsMouselooking", "IsMouseButtonDown",
    "IsShiftKeyDown", "IsControlKeyDown", "IsAltKeyDown", "GetCursorPosition",
-   "CursorHasItem", "CursorHasSpell",
+   "CursorHasItem", "CursorHasSpell", "GetMouseFocus", "MouseIsOver",
+   -- Klasse, Gestalt, Talente (Druidenform des Bots, AT_Bot.lua / "/at strat")
+   "UnitClass", "UnitLevel", "GetNumShapeshiftForms", "GetShapeshiftFormInfo",
+   "GetSpellInfo", "GetTalentTabInfo",
    -- Chat
    "SendChatMessage", "strsplit",
    -- Karten

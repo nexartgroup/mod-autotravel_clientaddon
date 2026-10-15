@@ -30,12 +30,16 @@ local B = AT.Bot
 -- Profils, weil sie je nach Klasse ohnehin nur teilweise passen.
 
 B.CombatFlags = {
-   { "dps",             "Schadenszauber und -faehigkeiten benutzen" },
-   { "assist",          "ein Ziel nach dem anderen" },
+   -- Achtung: "dps" und "heal" sind KLASSENstrategien. Fuer Druiden heisst "dps"
+   -- Katzenform und "heal" Wiederherstellung (Heiler, greift nicht an); die
+   -- beiden verdraengen einander und die Standardstrategie des Talentbaums.
+   -- Die festen Profile setzen sie deshalb nicht; "co !" waehlt die richtige.
+   { "dps",             "Klassenstrategie Schaden (Druide: Katze!)" },
+   { "dps assist",      "Angreifer als Ziel waehlen und bekaempfen" },
    { "aoe",             "mehrere Ziele gleichzeitig" },
    { "tank",            "Bedrohung aufbauen" },
    { "tank assist",     "Gegner von anderen wegziehen" },
-   { "heal",            "Gruppe heilen" },
+   { "heal",            "Klassenstrategie Heilen (Druide: greift nicht an!)" },
    { "healer dps",      "Heiler zaubern Schaden bei genug Mana" },
    { "save mana",       "Heiler sparen Mana unter einem Schwellwert" },
    { "boost",           "grosse Abklingzeiten benutzen" },
@@ -64,6 +68,11 @@ B.NonCombatFlags = {
 -- Feste Profile
 -- ---------------------------------------------------------------------------
 
+-- "co !" setzt die zum Talentbaum passende Kampfstrategie (Druide: Gleichgewicht,
+-- Katze, Wiederherstellung ...). "+dps" und "+heal" wuerden sie ersetzen: beim
+-- Druiden ist "dps" die Katzenform (unter Stufe 20 ohne Gestalt) und "heal" die
+-- Wiederherstellung, die nicht angreift. Deshalb setzen die Profile nur
+-- klassenneutrale Strategien.
 B.Builtin = {
    {
       key = "minimal", name = "Minimal",
@@ -82,14 +91,14 @@ B.Builtin = {
    {
       key = "verteidigen", name = "Verteidigen",
       desc = "Wehrt sich, sucht aber keinen Kampf.",
-      combat    = "+dps,+assist,+avoid aoe,-aoe,-grind,-boost",
+      combat    = "+dps assist,+avoid aoe,-aoe,-grind,-boost",
       noncombat = "-grind,-new rpg,-loot,-follow,+food",
       grace = 2.0,
    },
    {
       key = "normal", name = "Normal",
       desc = "Wehrt sich mit vollem Repertoire und pluendert Gegner (ohne Ressourcen).",
-      combat    = "+dps,+assist,+aoe,+avoid aoe,+heal,-grind",
+      combat    = "+dps assist,+aoe,+avoid aoe,-grind",
       -- Frueher stand hier "-loot": das Profil nannte sich "Normal" und lootete
       -- nie. Die nc-Strategie "loot" nimmt die Beute auf, "ll normal" legt fest,
       -- was ("ll" kennt nur all/*, gray/g und disenchant; alles andere gilt als
@@ -104,7 +113,7 @@ B.Builtin = {
    {
       key = "aggressiv", name = "Aggressiv",
       desc = "Greift alles an und pluendert die Beute.",
-      combat    = "+dps,+assist,+aoe,+boost,+grind",
+      combat    = "+dps assist,+aoe,+boost,+grind",
       noncombat = "+loot,-new rpg,-follow,+food",
       extra = { "ll normal" },
       loot = true, grace = 7.0,
@@ -112,7 +121,7 @@ B.Builtin = {
    {
       key = "plus", name = "Plus",
       desc = "Wehrt sich, pluendert Gegner, sammelt Beruferessourcen.",
-      combat    = "+dps,+assist,+aoe,+avoid aoe,+heal,-grind",
+      combat    = "+dps assist,+aoe,+avoid aoe,-grind",
       -- "ll" kennt nur all/*, gray/g und disenchant; jeder andere Wert (auch
       -- "skill") wird zu "normal" (LootStrategyValue::instance). Ressourcen
       -- sammelt die nc-Strategie "gather".
@@ -534,13 +543,94 @@ end
 -- einmal, wenn seitdem nichts angewendet wurde (die Anwendung enthaelt sie schon).
 B.applyCount = 0
 
-function B.ApplyProfile()
+-- ---------------------------------------------------------------------------
+-- Druiden: Strategie folgt der Gestalt
+-- ---------------------------------------------------------------------------
+-- Bei Druiden schliessen sich die Kampfstrategien bear / cat / balance / resto
+-- gegenseitig aus (mod-playerbots entfernt beim Setzen die "Geschwister"), alle
+-- gleichzeitig geht also nicht. Jede wuerde ausserdem versuchen, den Druiden in
+-- ihre eigene Gestalt zu bringen. Stattdessen liest das Addon die aktuelle
+-- Gestalt und setzt die dazu passende Strategie hinter die Profilstrategien.
+-- Ohne Gestalt (oder Reise-/Wasser-/Flugform) bleibt die Vorgabe von "co !", die
+-- zum Talentbaum und zur Stufe passt.
+
+-- Die Symbole der Gestalten taugen nicht zur Erkennung (der Baer traegt hier
+-- "Spell_Nature_WispSplode"). Verglichen wird deshalb mit den Zaubern selbst:
+-- GetSpellInfo(id) liefert Name und Symbol in der Sprache des Clients.
+local FORM_SPELLS = {
+   { 5487,  "bear"    },       -- Baergestalt
+   { 9634,  "bear"    },       -- Terrorbaergestalt
+   { 768,   "cat"     },       -- Katzengestalt
+   { 24858, "balance" },       -- Mondkingestalt
+   { 33891, "resto"   },       -- Baum des Lebens
+}
+
+-- Strategiename der aktuellen Gestalt oder nil (kein Druide, keine Gestalt,
+-- Reisegestalten).
+function B.DruidForm()
+   if not UnitClass or not GetNumShapeshiftForms or not GetShapeshiftFormInfo then return nil end
+   local _, class = UnitClass("player")
+   if class ~= "DRUID" then return nil end
+   for i = 1, GetNumShapeshiftForms() do
+      local icon, name, active = GetShapeshiftFormInfo(i)
+      if active then
+         for _, f in ipairs(FORM_SPELLS) do
+            local sname, _, sicon = GetSpellInfo(f[1])
+            if sname and sname == name then return f[2] end
+            if sicon and icon and sicon == icon and f[2] ~= "bear" then return f[2] end
+         end
+         -- Baer: Symbol erst nach den Namen vergleichen, weil Katze und Baer
+         -- sich in manchen Staenden ein Symbol teilen koennten.
+         for _, f in ipairs(FORM_SPELLS) do
+            local _, _, sicon = GetSpellInfo(f[1])
+            if sicon and icon and sicon == icon then return f[2] end
+         end
+         return nil
+      end
+   end
+   return nil
+end
+
+B.formStrategy = nil          -- die zuletzt gesendete Gestaltstrategie
+
+-- Wertet der Server den Charakter als Wilden Kampf? Er nimmt ab Stufe 10 den
+-- Talentbaum mit den meisten Punkten (bei Gleichstand den ersten); davor und
+-- ohne Punkte gilt bei Druiden immer Gleichgewicht (AiFactory::GetPlayerSpecTab).
+function B.IsFeralSpec()
+   if not GetTalentTabInfo or not UnitLevel then return false end
+   if UnitLevel("player") < 10 then return false end
+   local best, bestPoints = nil, 0
+   for i = 1, 3 do
+      local _, _, points = GetTalentTabInfo(i)
+      points = tonumber(points) or 0
+      if points > bestPoints then best, bestPoints = i, points end
+   end
+   return best == 2
+end
+
+-- Der Befehl fuer die Gestalt. Bei Baer und Katze ohne Wilden-Kampf-Talentbaum
+-- haengen "aoe", "cc", "boost" und "cure" an den Gleichgewichts-Triggern des
+-- Servers (Hurrikan, Sternenfall, Wucherwurzeln, Heilung ...): das sind
+-- Zauber, die in Tiergestalt scheitern. Jeder Fehlschlag spielt im Client den
+-- Fehlerton, und die Aktion blockiert die Bearenfaehigkeiten.
+function B.FormCommand(form)
+   if not form then return nil end
+   local cmd = "co +" .. form
+   if (form == "bear" or form == "cat") and not B.IsFeralSpec() then
+      cmd = cmd .. ",-aoe,-cc,-boost,-cure"
+   end
+   return cmd
+end
+
+-- formOnly: nur die Kampfstrategien neu senden (Gestaltwechsel); "nc", Wartezeit
+-- und Meldung bleiben unberuehrt.
+function B.ApplyProfile(formOnly)
    if not AT.GetBool("BotControl") then return end
-   B.applyCount = B.applyCount + 1
+   if not formOnly then B.applyCount = B.applyCount + 1 end
    local p = B.Current()
 
    B.Whisper("co !")
-   B.Whisper("nc !")
+   if not formOnly then B.Whisper("nc !") end
 
    if p.customIndex then
       local c = B.CustomSlot(p.customIndex)
@@ -551,30 +641,56 @@ function B.ApplyProfile()
       end
       SendFlagList("co", cparts)
 
-      local nparts = {}
-      for _, f in ipairs(B.NonCombatFlags) do
-         table.insert(nparts, (c.noncombat[f[1]] and "+" or "-") .. f[1])
-      end
-      SendFlagList("nc", nparts)
+      if not formOnly then
+         local nparts = {}
+         for _, f in ipairs(B.NonCombatFlags) do
+            table.insert(nparts, (c.noncombat[f[1]] and "+" or "-") .. f[1])
+         end
+         SendFlagList("nc", nparts)
 
-      if c.extra and c.extra ~= "" then
-         for line in string.gmatch(c.extra, "[^;\n]+") do
-            line = AT.trim(line)
-            if line ~= "" then B.Whisper(line) end
+         if c.extra and c.extra ~= "" then
+            for line in string.gmatch(c.extra, "[^;\n]+") do
+               line = AT.trim(line)
+               if line ~= "" then B.Whisper(line) end
+            end
          end
       end
    else
       if p.combat and p.combat ~= "" then B.Whisper("co " .. p.combat) end
-      if p.noncombat and p.noncombat ~= "" then B.Whisper("nc " .. p.noncombat) end
-      if p.extra then
-         for _, e in ipairs(p.extra) do B.Whisper(e) end
+      if not formOnly then
+         if p.noncombat and p.noncombat ~= "" then B.Whisper("nc " .. p.noncombat) end
+         if p.extra then
+            for _, e in ipairs(p.extra) do B.Whisper(e) end
+         end
       end
    end
 
+   -- Druide: Strategie der aktuellen Gestalt als letztes setzen, damit sie die
+   -- Profilstrategien nicht verdraengen.
+   B.formStrategy = B.DruidForm()
+   if B.formStrategy then B.Whisper(B.FormCommand(B.formStrategy)) end
+
+   if formOnly then return end
    -- Wartezeit nach dem Kampf: gilt nur fuer die eigene Sitzung des Servermoduls.
    AT.SetSessionOption("grace", p.grace or 2.0)
    AT.Print("Profil: |cffffffff" .. p.name .. "|r - " .. p.desc)
 end
+
+-- Gestaltwechsel: kurz entprellen (beim Wechsel feuern mehrere Ereignisse), dann
+-- die Strategie nachziehen, wenn sie sich wirklich geaendert hat.
+local formFrame = CreateFrame("Frame")
+local formDue = 0
+formFrame:RegisterEvent("UPDATE_SHAPESHIFT_FORM")
+formFrame:SetScript("OnEvent", function()
+   formDue = GetTime() + 0.6
+end)
+formFrame:SetScript("OnUpdate", function()
+   if formDue == 0 or GetTime() < formDue then return end
+   formDue = 0
+   if not B.IsRunning() or not AT.GetBool("BotControl") then return end
+   if B.DruidForm() == B.formStrategy then return end
+   B.ApplyProfile(true)
+end)
 
 -- ---------------------------------------------------------------------------
 -- Selbstmodus an / aus

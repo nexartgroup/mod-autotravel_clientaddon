@@ -103,6 +103,8 @@ Die Pruefung bleibt beim Server; die gesperrten Knoepfe sind nur Komfort.
 | `/at bot`, `/at botan`, `/at botaus` | Playerbot-Steuerung / Selbstmodus |
 | `/at karte <id>`, `/at karten` | Karten-ID erzwingen / Kartentabelle neu aufbauen |
 | `/at optionen`, `/at panel`, `/at knopf`, `/at debug` | Oberflaeche und Diagnose |
+| `/at ui` | Diagnose: Zustand der Panel-Knoepfe (frei / gesperrt), Zaehler fuer Betreten und Klicks des Uebernehmen-Knopfes, was unter der Maus liegt |
+| `/at strat` | Diagnose: erkannte Druidengestalt, zuletzt gesendete Gestaltstrategie, Gestaltliste; fragt den Bot per `co ?` und `nc ?` nach seinen aktiven Strategien |
 
 ## Ziel: Name und Zielanker
 
@@ -221,6 +223,57 @@ Regler nur seinen letzten Wert meldet. Das Format der Nachrichten und die
 Versionsregeln stehen in der README von mod-autotravel (Abschnitt "Protokoll").
 Das Addon spricht Protokoll 4 und versteht auch Module mit Protokoll 3.
 
+## Aenderungen in 11.4
+
+**Uebernehmen und Neu berechnen reagieren zuverlaessig.**
+
+* Die Knoepfe werden nicht mehr ueber `Disable()` / `Enable()` des Clients gesperrt (nach
+  vielen Wechseln verwarf der Client Klicks), sondern ueber einen eigenen Merker. Ein
+  gesperrter Knopf bleibt sichtbar, ignoriert Klicks und nennt im Tooltip den Grund. Liegt die
+  Maus schon auf dem Knopf, wenn er frei wird, ist er sofort hervorgehoben.
+* **Ohne eigenen Stand der Reise** (nach `/reload`, per Chat gestartet) bleiben **Uebernehmen**
+  und **Neu berechnen** klickbar, solange das Servermodul erreichbar ist (Zustand nicht
+  `ABSENT`, `INCOMPATIBLE` oder `DISABLED`). Uebernehmen sendet dann `.at pause` und
+  `.at status`, Neu berechnen `.at repath`; der Server entscheidet. Vorher meldete Uebernehmen
+  nur "Keine Reise aktiv".
+* Die Umlaute der Bedienelemente ("Uebernehmen" und die Tooltips) stehen jetzt als echte
+  Umlaute im Panel (die Dateien sind UTF-8 ohne BOM).
+
+**Pause in mehr Zustaenden.** Bei einer Reise, die das Addon kennt, ist Uebernehmen in jedem
+Zustand moeglich, ausser im Kampf, bei der Uebergabe (dort heisst der Knopf Weiter) und in dem
+kurzen Zustand "Startet" zwischen Klick auf START und erster Statuszeile (die Pause wuerde den
+noch wartenden Start ueberholen). Vorher ging es nur bei "Berechnet neu", "Unterwegs", "Sitzt
+auf" und "Hebt ab". Im Flug, auf einem Transport und beim Warten auf die Verbindung geht die
+Anfrage an den Server; er lehnt dort mit einer Erklaerung ab ("in diesem Abschnitt steuert
+niemand"), und das Addon zeigt keine Pause an.
+
+**Laufende Reise nach dem Neuladen.** Nach dem Handschlag fragt das Addon einmal `.at status`
+ab, noch vor den vorgemerkten Befehlen. Eine Reise, die der Server weiterfuehrt, erscheint
+damit nach `/reload` wieder im Panel (Anzeige, Stop, Weiter, Uebernehmen). Wartet schon ein
+Start auf den Handschlag, entfaellt die Abfrage; seine Statuszeile ist die Antwort.
+
+**Playerbot-Strategien.**
+
+* Die vorgegebenen Profile setzen `+dps assist` statt `+dps,+assist` und setzen `dps` und `heal`
+  nicht mehr. Beides sind Klassenstrategien (beim Druiden Katzengestalt bzw. Wiederherstellung,
+  die nicht angreift); `co !` waehlt die zum Talentbaum passende. In der Strategieliste des
+  Editors heisst der Eintrag nun `dps assist`; `assist` allein gibt es dort nicht mehr. Wer
+  `assist` schon in einem eigenen oder geaenderten Profil gespeichert hat, sendet es damit
+  nicht mehr und setzt im Editor `dps assist` neu.
+* **Druiden: die Strategie folgt der Gestalt.** Das Addon liest die aktuelle Gestalt (Baer,
+  Katze, Mondkin, Baum des Lebens) und sendet die passende Kampfstrategie (`co +bear`,
+  `co +cat`, `co +balance`, `co +resto`) hinter die Profilstrategien. Ohne Gestalt und in
+  Reise-, Wasser- und Fluggestalt bleibt es bei der Vorgabe von `co !`. Bei Baer und Katze
+  ohne Talentbaum Wilder Kampf (ab Stufe 10 der mit den meisten Punkten) kommt
+  `,-aoe,-cc,-boost,-cure` dazu: diese Strategien haengen am Gleichgewichts-Zauber des Servers
+  und scheitern in Tiergestalt.
+* Bei einem Gestaltwechsel (`UPDATE_SHAPESHIFT_FORM`) wartet das Addon kurz (0,6 s) und sendet
+  nur die Kampfstrategien neu: kein `nc`, keine Wartezeit, keine Profilmeldung. Das geschieht
+  nur, wenn der Selbstmodus laeuft und sich die Gestalt wirklich geaendert hat.
+
+**Diagnosebefehle.** `/at ui` und `/at strat` (siehe Befehle) zeigen, warum ein Knopf nicht
+reagiert bzw. welche Strategien der Bot gerade hat.
+
 ## Fehlersuche
 
 | Beobachtung | Ursache / Abhilfe |
@@ -233,6 +286,7 @@ Das Addon spricht Protokoll 4 und versteht auch Module mit Protokoll 3.
 | Optionen "Natuerliche Navigation" grau | serverweit, nur fuer Spielleiter |
 | "Der Server verweigert den Playerbot-Selbstmodus" | `AiPlayerbot.SelfBotLevel` am Server |
 | Weg wird nicht gefunden | `/at diag`; fehlen mmaps/vmaps fuer die Kachel? |
+| Ein Knopf im Panel reagiert nicht | `/at ui`: zeigt, ob er gesperrt ist, ob Klicks ankommen und was unter der Maus liegt |
 
 `/at debug` zeigt jeden gesendeten Befehl und die Diagnosemeldungen des Servers.
 

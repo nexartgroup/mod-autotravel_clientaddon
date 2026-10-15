@@ -78,7 +78,9 @@ function UI.Button(parent, w, h, label, onClick)
    fs:SetText(label)
    b.label = fs
 
+   b.nEnter, b.nClick = 0, 0       -- Diagnose: siehe '/at ui'
    b:SetScript("OnEnter", function()
+      b.nEnter = b.nEnter + 1
       if b.disabledTip and not b:IsEnabled() then
          GameTooltip:SetOwner(b, "ANCHOR_RIGHT")
          GameTooltip:AddLine(b.disabledTip, 0.8, 0.8, 0.8, true)
@@ -97,7 +99,19 @@ function UI.Button(parent, w, h, label, onClick)
       UI.RestColors(b)
       GameTooltip:Hide()
    end)
-   b:SetScript("OnClick", onClick)
+   b:SetScript("OnClick", function(...)
+      b.nClick = b.nClick + 1
+      if b.uiOff then return end
+      return onClick(...)
+   end)
+
+   -- Sperren ueber einen eigenen Merker statt Disable()/Enable(): ein Knopf, der
+   -- im Spiel dauernd zwischen beiden wechselt, verwarf danach Klicks.
+   local engineIsEnabled = b.IsEnabled
+   b.IsEnabled = function(self)
+      if self.uiOff then return nil end
+      return engineIsEnabled(self)
+   end
    return b
 end
 
@@ -119,16 +133,35 @@ function UI.SetSelected(b, selected)
    UI.RestColors(b)
 end
 
+-- Liegt der Mauszeiger auf dem Frame? In 3.3.5a heisst die Abfrage MouseIsOver(frame);
+-- Frame:IsMouseOver() kam erst spaeter.
+local function MouseOver(f)
+   if MouseIsOver then return MouseIsOver(f) end
+   if f.IsMouseOver then return f:IsMouseOver() end
+   return false
+end
+
 -- Knopf sperren oder freigeben. Gesperrte Knoepfe bleiben sichtbar und erklaeren
 -- im Tooltip, warum sie gesperrt sind, statt zu verschwinden.
 function UI.SetEnabled(b, enabled, reason)
    if not b then return end
    b.disabledTip = reason
    if enabled then
-      if not b:IsEnabled() then b:Enable() end
+      if b.uiOff then
+         b.uiOff = false
+         -- Lag die Maus schon auf dem Knopf, feuert WoW kein neues OnEnter: die
+         -- Hervorhebung sonst erst nach Verlassen und erneutem Betreten.
+         if MouseOver(b) then
+            b:SetBackdropColor(0.19, 0.22, 0.27, 1)
+            b:SetBackdropBorderColor(COL.accent[1], COL.accent[2], COL.accent[3], 1)
+         end
+      end
       b:SetAlpha(1)
    else
-      if b:IsEnabled() then b:Disable() end
+      if not b.uiOff then
+         b.uiOff = true
+         UI.RestColors(b)
+      end
       b:SetAlpha(0.45)
    end
 end
@@ -251,13 +284,13 @@ local function BuildPanel()
    go.label:SetFontObject("GameFontNormal")
    f.go = go
 
-   local pause = UI.Button(f, 99, 20, "Uebernehmen", function() AT.Handover.Toggle() end)
+   local pause = UI.Button(f, 99, 20, "Übernehmen", function() AT.Handover.Toggle() end)
    pause:SetPoint("TOPLEFT", 12, -144)
    pause.tip = function()
-      GameTooltip:AddLine("Steuerung uebernehmen")
-      GameTooltip:AddLine("Der Autopilot haelt an und gibt dir die Kontrolle.", 0.7, 0.7, 0.7, true)
-      GameTooltip:AddLine("Nach einer Weile ohne Eingabe laeuft ein Countdown, " ..
-                          "danach faehrt er weiter. Ein ausdruecklich uebernommener " ..
+      GameTooltip:AddLine("Steuerung übernehmen")
+      GameTooltip:AddLine("Der Autopilot hält an und gibt dir die Kontrolle.", 0.7, 0.7, 0.7, true)
+      GameTooltip:AddLine("Nach einer Weile ohne Eingabe läuft ein Countdown, " ..
+                          "danach fährt er weiter. Ein ausdrücklich übernommener " ..
                           "Halt endet nur mit einem Klick auf 'Weiter'.", 0.6, 0.62, 0.66, true)
       GameTooltip:AddLine(" ")
       GameTooltip:AddLine("Auch per Taste: Optionen -> Tastaturbelegung -> AutoTravel.", 0.6, 0.62, 0.66, true)
@@ -319,7 +352,7 @@ local function BuildPanel()
    tp.tip = function()
       GameTooltip:AddLine("Direkt zum Ziel springen")
       GameTooltip:AddLine("Nur fuer den Notfall - der normale Weg", 0.7, 0.7, 0.7)
-      GameTooltip:AddLine("ist START, damit der Charakter laeuft.", 0.7, 0.7, 0.7)
+      GameTooltip:AddLine("ist START, damit der Charakter läuft.", 0.7, 0.7, 0.7)
    end
    f.tp = tp
 
@@ -381,7 +414,7 @@ local function BuildMinimap()
       end
       GameTooltip:AddLine(" ")
       GameTooltip:AddLine("Links: Reise starten / stoppen", 0.33, 0.82, 0.48)
-      GameTooltip:AddLine("Mitte: Steuerung uebernehmen / zurueckgeben", 0.35, 0.71, 0.91)
+      GameTooltip:AddLine("Mitte: Steuerung übernehmen / zurückgeben", 0.35, 0.71, 0.91)
       GameTooltip:AddLine("Rechts: Teleport zum Ziel", 0.91, 0.77, 0.29)
       GameTooltip:AddLine("Ziehen: Knopf verschieben", 0.6, 0.6, 0.6)
       GameTooltip:Show()
@@ -526,21 +559,29 @@ function UI.Update()
 
    panel.go.label:SetText(AT.active and "STOP" or "START")
 
+   -- Ohne eigenen Stand der Reise trotzdem klickbar, wenn das Servermodul da ist.
+   local linked = AT.Net.state ~= "ABSENT" and AT.Net.state ~= "INCOMPATIBLE"
+                  and AT.Net.state ~= "DISABLED"
+
    -- Uebernehmen / Weiter
    if AT.Handover.CanResume() then
       panel.pause.label:SetText("|cff53d17aWeiter|r")
       UI.SetEnabled(panel.pause, true)
    else
-      panel.pause.label:SetText("Uebernehmen")
+      panel.pause.label:SetText("Übernehmen")
       local can = AT.Handover.CanPause()
       local why
-      if not AT.active then why = "Es laeuft keine Reise."
+      if not AT.active then
+         -- Das Addon kennt die Reise evtl. nicht (Reload, per Chat gestartet):
+         -- der Server entscheidet, solange das Modul erreichbar ist.
+         can = linked
+         if not can then why = "Kein Servermodul erreichbar (" .. tostring(AT.Net.state) .. "). '/at hello' fragt es erneut ab." end
       elseif s.state == "COMBAT" then why = "Im Kampf hast du die Kontrolle ohnehin. Danach geht es von selbst weiter."
-      elseif not can then why = "In diesem Zustand (" .. tostring(s.state) .. ") steuert ohnehin niemand." end
+      elseif not can then why = "In diesem Zustand (" .. tostring(s.state) .. ") ist keine Übernahme nötig." end
       UI.SetEnabled(panel.pause, can, why)
    end
 
-   UI.SetEnabled(panel.re, AT.active, "Es laeuft keine Reise.")
+   UI.SetEnabled(panel.re, AT.active or linked, "Kein Servermodul erreichbar (" .. tostring(AT.Net.state) .. "). '/at hello' fragt es erneut ab.")
 
    -- Teleport: nur anbieten, wenn der Server ihn diesem Spieler erlaubt.
    local tpOk = (AT.Get("TeleportMode") == "go") or AT.Net.Can("TELEPORT")

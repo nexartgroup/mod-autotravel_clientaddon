@@ -272,6 +272,14 @@ local function OnHello(body)
       end
       AT.Debug(string.format("Server %s, Protokoll %d, Rechte %d, Faehigkeiten %d, %d Knoten",
                s.version, s.proto, s.sec, s.caps, s.nodes))
+      -- Eine laufende Reise (nach Reload) wieder aufgreifen. Vor den
+      -- vorgemerkten Befehlen, damit deren Reihenfolge unberuehrt bleibt. Wartet
+      -- schon ein Start auf seine Annahme, entfaellt die Abfrage: ihre Antwort IDLE
+      -- kaeme vor der des Starts, sah wie eine Absage aus und setzte die Anzeige
+      -- kurz auf START zurueck.
+      if not (AT.StartPending and AT.StartPending()) then
+         Enqueue({ cmd = "at status", key = "status" })
+      end
       FlushHeld()
    end
 
