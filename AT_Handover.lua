@@ -49,16 +49,24 @@ local lastResumeAt = -1000    -- Zeitpunkt des letzten ".at resume"
 -- Server nie antwortet.
 local MIN_RESUME_GAP = 6
 
--- Zustaende des Servers, in denen ein Uebernehmen sinnvoll ist. In allen
--- anderen (Flug, Transport, Warten auf Portal) steuert ohnehin niemand.
-local PAUSABLE = { REPATHING = true, TRAVELING = true, MOUNTING = true, TAKEOFF = true }
+-- Zustaende, in denen ein Uebernehmen nichts bringt: im Kampf und waehrend der
+-- Uebergabe hat der Spieler die Kontrolle ohnehin; STARTING ist der Zustand des
+-- Addons zwischen Klick und erster Statuszeile (die Pause wuerde den noch wartenden
+-- Start auf der Leitung ueberholen). In allen anderen (auch Flug und Transport) darf
+-- er pausieren; der Server lehnt ab, wenn es nichts zu pausieren gibt.
+local NOT_PAUSABLE = { COMBAT = true, PLAYER = true, IDLE = true, ARRIVED = true,
+                       FAILED = true, STARTING = true }
+
+-- Hier lehnt der Server die Pause mit einer Erklaerung ab ("in diesem Abschnitt
+-- steuert niemand"); das Addon merkt sich dann keine Pause vor.
+local SERVER_REFUSES = { TAXI = true, TRANSPORT = true, MANUAL = true }
 
 -- ---------------------------------------------------------------------------
 -- Abfragen fuer die Oberflaeche
 -- ---------------------------------------------------------------------------
 
 function H.CanPause()
-   return AT.active and PAUSABLE[AT.status.state] == true and AT.Net.Can("HANDOVER")
+   return AT.active and not NOT_PAUSABLE[AT.status.state] and AT.Net.Can("HANDOVER")
 end
 
 function H.CanResume()
@@ -77,9 +85,11 @@ end
 
 function H.Pause()
    if not H.CanPause() then return false end
-   manualPending = true
-   manualPendingAt = GetTime()
-   H.countdown = nil
+   if not SERVER_REFUSES[AT.status.state] then
+      manualPending = true
+      manualPendingAt = GetTime()
+      H.countdown = nil
+   end
    AT.Net.SendNow("at pause", "pause")
    if AT.UI then AT.UI.Update() end
    return true
@@ -98,7 +108,10 @@ end
 -- Taste und Knopf: je nach Lage uebernehmen oder zurueckgeben.
 function H.Toggle()
    if not AT.active then
-      AT.Print("Keine Reise aktiv.")
+      -- Der Stand des Addons kann veraltet sein (Reload, Start per Chat): den
+      -- Server fragen und die Pause versuchen, er lehnt ab, wenn nichts laeuft.
+      AT.Net.SendNow("at pause", "pause")
+      AT.Net.SendNow("at status", "status")
    elseif AT.status.state == "COMBAT" then
       AT.Print("Im Kampf hast du ohnehin die Kontrolle. Danach geht es von selbst weiter.")
    elseif H.CanResume() then

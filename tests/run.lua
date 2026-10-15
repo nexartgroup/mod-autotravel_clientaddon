@@ -316,11 +316,15 @@ end)
 
 test("Befehle gehen mit Abstand hinaus (Flutbremse des Clients)", function()
    ready()
+   -- Der Handschlag hat einen "at status" vorgemerkt (eine laufende Reise nach einem
+   -- Reload wieder aufgreifen); er geht zusammen mit den fuenf eigenen Befehlen hinaus.
+   local fromHandshake = 1
    for i = 1, 5 do AutoTravel.Send("at status", { key = nil }) end
    W.Advance(0.3)
    check(#W.sent <= 1, "in 0,3 s hoechstens ein normaler Befehl, waren " .. #W.sent)
-   W.Advance(3)
-   eq(#W.sent, 5, "alle fuenf kommen an")
+   W.Advance(4)
+   eq(#W.sent, 5 + fromHandshake, "alle fuenf eigenen kommen an, dazu der eine des Handschlags")
+   eq(count(".at status"), 5 + fromHandshake, "es sind alles Statusabfragen")
 end)
 
 test("Raw-Befehle brauchen keinen Handschlag", function()
@@ -474,12 +478,22 @@ end)
 test("Uebernehmen ist nur in sinnvollen Zustaenden moeglich", function()
    ready()
    local H = AutoTravel.Handover
-   status("TAXI|900|Ziel|0|0|0|1|2|10")
-   check(not H.CanPause(), "nicht waehrend eines Flugs")
-   status("TRANSPORT|900|Ziel|0|0|0|1|2|10")
-   check(not H.CanPause(), "nicht auf einem Transport")
+   -- Flug, Transport und Warten auf die Verbindung: der Knopf bleibt frei (seit 11.4);
+   -- der Server lehnt dort ab und erklaert es.
+   for _, st in ipairs({ "TAXI", "TRANSPORT", "MANUAL", "REPATHING", "TRAVELING", "MOUNTING", "TAKEOFF" }) do
+      status(st .. "|900|Ziel|0|0|0|1|2|10")
+      check(H.CanPause(), "Uebernehmen moeglich: " .. st)
+      check(not H.CanResume(), "kein Weiter: " .. st)
+   end
    status("COMBAT|900|Ziel|0|0|0|1|2|10")
    check(not H.CanPause() and not H.CanResume(), "nicht im Kampf")
+   status("PLAYER|900|Ziel|16|0|0|1|2|10")
+   check(not H.CanPause() and H.CanResume(), "bei der Uebergabe: nur Weiter")
+   for _, st in ipairs({ "IDLE", "ARRIVED", "FAILED" }) do
+      status("TRAVELING|900|Ziel|8|0|0|1|2|10")
+      status(st .. "|0|-|0|0|0|0|0|0")
+      check(not H.CanPause() and not H.CanResume(), "ohne Reise nichts moeglich: " .. st)
+   end
    status("TRAVELING|900|Ziel|8|0|0|1|2|10")
    check(H.CanPause(), "beim Fahren")
 end)
@@ -1732,6 +1746,916 @@ test("abgeschaltetes oder zu altes Modul verwirft auch den wartenden Start-Merke
    eq(AutoTravel.pendingStartAt, nil, "Merker verworfen")
    W.Advance(10)
    eq(count(".playerbots bot self"), 0, "kein Selbstmodus")
+end)
+
+-- ---------------------------------------------------------------------------
+-- 11.4: Statusaufnahme nach dem Handschlag, Uebernehmen / Neu berechnen,
+--       Knopfsperre, Diagnosebefehle, Druidengestalt
+-- ---------------------------------------------------------------------------
+
+-- Die vom Handschlag vorgemerkten Befehle ("at status") hinausgehen lassen und
+-- vergessen, damit der Test nur noch seine eigenen sieht.
+local function settle()
+   W.Advance(2)
+   W.ClearSent()
+end
+
+local function msgCount() return #W.messages end
+
+local function messagesSince(n)
+   local out = {}
+   for i = n + 1, #W.messages do out[#out + 1] = W.messages[i] end
+   return out
+end
+
+local function anyMessage(list, text)
+   for _, m in ipairs(list) do
+      if m:find(text, 1, true) then return true end
+   end
+   return false
+end
+
+local function sentIs(expected, msg)
+   local got = W.SentCommands()
+   local ok = (#got == #expected)
+   if ok then
+      for i = 1, #expected do if got[i] ~= expected[i] then ok = false end end
+   end
+   check(ok, msg .. "  (erwartet [" .. table.concat(expected, " | ") ..
+              "], war [" .. table.concat(got, " | ") .. "])")
+end
+
+-- Handschlag: Statusabfrage ---------------------------------------------
+
+test("nach dem Handschlag geht 'at status' genau einmal und vor den vorgemerkten Befehlen hinaus", function()
+   boot()
+   AutoTravel.Send("at repath", { key = "repath" })     -- vor dem Handschlag: vorgemerkt
+   AutoTravel.Send("at nodes", { key = "nodes" })
+   W.Advance(3)
+   hello()
+   W.Advance(4)
+   local pos = {}
+   for i, c in ipairs(W.SentCommands()) do pos[c] = pos[c] or i end
+   eq(count(".at status"), 1, "genau eine Statusabfrage")
+   check(pos[".at hello"] and pos[".at status"] and pos[".at hello"] < pos[".at status"],
+         "nach dem Handschlag selbst")
+   check(pos[".at repath"] and pos[".at status"] < pos[".at repath"], "vor dem ersten vorgemerkten Befehl")
+   check(pos[".at nodes"] and pos[".at repath"] < pos[".at nodes"], "deren Reihenfolge bleibt")
+end)
+
+test("Start vor dem Handschlag: keine zusaetzliche Statusabfrage, die Anzeige springt nicht auf START", function()
+   boot()
+   installCarbonite(1)
+   AutoTravel.MapIds.Build(true)
+   AutoTravel.Start()                                   -- der Handschlag steht noch aus
+   eq(AutoTravel.status.state, "STARTING", "STARTING")
+   W.Advance(1)
+   hello()
+   W.Advance(3)
+   eq(count(".at status"), 0, "keine Abfrage: die Antwort des Starts genuegt")
+   eq(count(".at start"), 1, "der Start geht hinaus")
+   -- Haette das Addon gefragt, antwortete der Server vor dem Start noch ohne Reise.
+   if count(".at status") > 0 then status("IDLE|0|-|0|0|0|0|0|0") end
+   eq(AutoTravel.active, true, "noch aktiv, kein Rueckfall auf START")
+   status("TRAVELING|300|Ziel|8|20|0|1|1|10")
+   eq(AutoTravel.status.state, "TRAVELING", "die Annahme")
+   eq(_G.AutoTravelPanel.go.label:GetText(), "STOP", "STOP")
+end)
+
+test("ein vorgemerktes '/at status' wird mit der Abfrage des Handschlags zusammengelegt", function()
+   boot()
+   SlashCmdList["AUTOTRAVEL"]("status")                 -- vor dem Handschlag vorgemerkt
+   hello()
+   W.Advance(4)
+   eq(count(".at status"), 1, "nicht doppelt")
+end)
+
+test("eine Statuszeile holt aus ABSENT zurueck, ohne dass noch ein 'at status' folgt", function()
+   boot()
+   W.Advance(3) W.Advance(5.5) W.Advance(5.5)
+   eq(AutoTravel.Net.state, "ABSENT", "ABSENT")
+   W.ClearSent()
+   status("TRAVELING|300|Ziel|8|20|0|1|1|10")
+   W.Advance(4)
+   eq(AutoTravel.Net.state, "READY", "READY")
+   eq(count(".at status"), 0, "die Statuszeile ist die Antwort: keine weitere Abfrage")
+end)
+
+test("eine laufende Reise wird nach dem Handschlag wieder aufgegriffen", function()
+   boot()
+   W.Advance(3)
+   hello()
+   W.Advance(1)
+   check(W.SentContains(".at status"), "Statusabfrage geht hinaus")
+   eq(AutoTravel.active, false, "bis zur Antwort kennt das Addon die Reise nicht")
+   status("TRAVELING|300|Ziel|8|20|0|1|1|10")           -- die Antwort des Servers
+   eq(AutoTravel.active, true, "Reise aktiv")
+   check(AutoTravel.Handover.CanPause(), "Uebernehmen moeglich")
+   eq(_G.AutoTravelPanel.pause:IsEnabled(), 1, "Knopf frei")
+   eq(_G.AutoTravelPanel.go.label:GetText(), "STOP", "START/STOP zeigt STOP")
+end)
+
+-- Uebergabe ---------------------------------------------------------------
+
+test("Toggle ohne bekannte Reise sendet Pause und Status und meldet nichts Irrefuehrendes", function()
+   ready()
+   settle()
+   local H = AutoTravel.Handover
+   eq(AutoTravel.active, false, "keine Reise bekannt")
+   local n = msgCount()
+   H.Toggle()
+   W.Advance(1)
+   sentIs({ ".at pause", ".at status" }, "erst die Pause, dann die Statusabfrage")
+   eq(#messagesSince(n), 0, "nichts im Chat ausgegeben")
+   check(not anyMessage(W.messages, "Keine Reise aktiv"), "kein 'Keine Reise aktiv'")
+   check(not H.IsManual(), "keine Pause vorgemerkt: die Anzeige bleibt ehrlich")
+   eq(H.StatusText(), nil, "keine Uebergabeanzeige")
+end)
+
+test("Toggle im Kampf nennt den Kampf und sendet nichts", function()
+   ready()
+   settle()
+   status("COMBAT|300|Ziel|0|0|0|1|1|10")
+   local n = msgCount()
+   AutoTravel.Handover.Toggle()
+   W.Advance(2)
+   eq(#W.sent, 0, "nichts gesendet")
+   local m = messagesSince(n)
+   eq(#m, 1, "genau eine Meldung")
+   check(anyMessage(m, "Im Kampf hast du ohnehin die Kontrolle"), "Hinweis auf den Kampf")
+end)
+
+test("Toggle: ohne Servermodul geht nichts hinaus, bei fehlender Faehigkeit gibt es einen Hinweis", function()
+   boot()
+   W.Advance(3) W.Advance(5.5) W.Advance(5.5)
+   eq(AutoTravel.Net.state, "ABSENT", "ABSENT")
+   W.ClearSent()
+   AutoTravel.Handover.Toggle()
+   W.Advance(2)
+   eq(#W.sent, 0, "nichts hinaus (sonst riefe der Charakter es in /sagen)")
+
+   ready(62, 0)                                         -- alle Faehigkeiten ausser Uebergabe
+   settle()
+   status("PLAYER|300|Ziel|0|0|0|1|1|10")
+   local n = msgCount()
+   AutoTravel.Handover.Toggle()
+   W.Advance(2)
+   eq(#W.sent, 0, "ohne Faehigkeit nichts gesendet")
+   check(anyMessage(messagesSince(n), "Gerade nicht moeglich (PLAYER)"), "Hinweis mit Zustand")
+end)
+
+test("CanPause/CanResume: Matrix ueber Reisezustand, Modulzustand und Faehigkeit", function()
+   ready()
+   local AT, H = AutoTravel, AutoTravel.Handover
+   local pausable = { "TAXI", "TRANSPORT", "MANUAL", "REPATHING", "TRAVELING", "MOUNTING", "TAKEOFF" }
+   local notPausable = { "COMBAT", "PLAYER", "IDLE", "ARRIVED", "FAILED", "STARTING" }
+
+   AT.active = true
+   for _, st in ipairs(pausable) do
+      AT.status.state = st
+      check(H.CanPause(), "CanPause " .. st)
+      check(not H.CanResume(), "kein CanResume " .. st)
+   end
+   for _, st in ipairs(notPausable) do
+      AT.status.state = st
+      check(not H.CanPause(), "kein CanPause " .. st)
+      check(H.CanResume() == (st == "PLAYER"), "CanResume nur bei PLAYER: " .. st)
+   end
+
+   -- ohne bekannte Reise geht keines von beiden (Toggle fragt dann den Server)
+   AT.active = false
+   for _, st in ipairs({ "TRAVELING", "PLAYER", "IDLE" }) do
+      AT.status.state = st
+      check(not H.CanPause() and not H.CanResume(), "keine Reise: " .. st)
+   end
+
+   -- Modulzustand
+   AT.active = true
+   for ns, ok in pairs({ READY = true, HELLO = true, UNKNOWN = true,
+                         ABSENT = false, INCOMPATIBLE = false, DISABLED = false }) do
+      AT.Net.state = ns
+      AT.status.state = "TRAVELING"
+      check(H.CanPause() == ok, "CanPause bei Modul " .. ns)
+      AT.status.state = "PLAYER"
+      check(H.CanResume() == ok, "CanResume bei Modul " .. ns)
+   end
+
+   -- ohne die Faehigkeit "Uebergabe" (Bit 1) gilt beides nicht
+   ready(62, 0)                                         -- ladet das Addon neu
+   AT, H = AutoTravel, AutoTravel.Handover
+   AT.active = true
+   AT.status.state = "TRAVELING"
+   check(not H.CanPause(), "ohne Faehigkeit: kein CanPause")
+   AT.status.state = "PLAYER"
+   check(not H.CanResume(), "ohne Faehigkeit: kein CanResume")
+end)
+
+test("Uebernehmen im Flug: der Befehl geht hinaus, aber es wird keine Pause vorgemerkt", function()
+   ready()
+   settle()
+   local H = AutoTravel.Handover
+   status("TAXI|900|Ziel|0|0|0|1|2|10")
+   check(H.Pause(), "Pause angenommen")
+   W.Advance(1)
+   sentIs({ ".at pause" }, "der Server bekommt die Pause und erklaert die Ablehnung")
+   check(not H.IsManual(), "die Anzeige behauptet keine Pause (der Server lehnt in diesem Abschnitt ab)")
+   eq(H.StatusText(), nil, "keine Uebergabeanzeige")
+   W.Advance(6)
+   status("TRAVELING|900|Ziel|8|0|0|1|2|10")
+   check(H.Pause(), "waehrend der Fahrt")
+   check(H.IsManual(), "dort wird die Pause vorgemerkt")
+end)
+
+test("Uebernehmen zwischen Klick auf START und erster Statuszeile ist gesperrt", function()
+   ready()
+   settle()
+   installCarbonite(1)
+   AutoTravel.MapIds.Build(true)
+   AutoTravel.Start()
+   eq(AutoTravel.status.state, "STARTING", "STARTING")
+   local H, P = AutoTravel.Handover, _G.AutoTravelPanel
+   check(not H.CanPause(), "keine Pause: sie wuerde den wartenden Start ueberholen")
+   eq(P.pause:IsEnabled(), nil, "Knopf gesperrt")
+   W.ClearSent()
+   click(P.pause)
+   eq(#W.sent, 0, "nichts gesendet")
+   W.Advance(1)
+   status("TRAVELING|300|Ziel|8|20|0|1|1|10")
+   check(H.CanPause(), "nach der Annahme moeglich")
+   eq(P.pause:IsEnabled(), 1, "Knopf frei")
+end)
+
+-- Knopfsperre ---------------------------------------------------------------
+
+test("UI.Button: ein gesperrter Knopf ignoriert Klicks und benutzt weder Enable() noch Disable()", function()
+   boot()
+   local UI = AutoTravel.UI
+   local calls, enables, disables = 0, 0, 0
+   local b = UI.Button(_G.UIParent, 80, 20, "Test", function() calls = calls + 1 end)
+   b.Enable = function() enables = enables + 1 end
+   b.Disable = function() disables = disables + 1 end
+
+   eq(b:IsEnabled(), 1, "frei")
+   click(b)
+   eq(calls, 1, "freier Knopf ruft den Handler")
+
+   UI.SetEnabled(b, false, "Grund")
+   eq(b:IsEnabled(), nil, "IsEnabled liefert nil, solange er gesperrt ist")
+   eq(b:GetAlpha(), 0.45, "abgeblendet")
+   click(b)
+   click(b)
+   eq(calls, 1, "Handler wird nicht gerufen")
+   eq(b.nClick, 3, "Klicks werden fuer '/at ui' trotzdem gezaehlt")
+
+   UI.SetEnabled(b, true)
+   eq(b:IsEnabled(), 1, "wieder frei")
+   eq(b:GetAlpha(), 1, "wieder voll sichtbar")
+   click(b)
+   eq(calls, 2, "ruft den Handler wieder")
+
+   eq(enables, 0, "Enable() nie gerufen")
+   eq(disables, 0, "Disable() nie gerufen")
+   eq(b.__enabled, true, "der Zustand der Engine blieb unberuehrt")
+end)
+
+test("UI.Button: wiederholte Wechsel zwischen frei und gesperrt verlieren keinen Klick", function()
+   boot()
+   local UI = AutoTravel.UI
+   local calls = 0
+   local b = UI.Button(_G.UIParent, 80, 20, "Test", function() calls = calls + 1 end)
+
+   local expected = 0
+   for i = 1, 300 do
+      local on = (i % 3) ~= 0
+      UI.SetEnabled(b, on, "Grund")
+      click(b)
+      if on then expected = expected + 1 end
+   end
+   eq(calls, expected, "genau die Klicks auf den freien Knopf kamen an")
+
+   for _ = 1, 50 do
+      UI.SetEnabled(b, false, "Grund")
+      UI.SetEnabled(b, true)
+   end
+   local before = calls
+   click(b)
+   eq(calls, before + 1, "nach vielen Wechseln noch ein Klick")
+   eq(b:IsEnabled(), 1, "und frei")
+end)
+
+test("Panel: Neu berechnen ueberlebt wechselnde Modulzustaende, kein Klick geht verloren", function()
+   ready()
+   settle()
+   local P = _G.AutoTravelPanel
+   AutoTravel.active = false
+   local sent, clicks = 0, 0
+   for i = 1, 20 do
+      AutoTravel.Net.state = (i % 2 == 0) and "ABSENT" or "READY"
+      AutoTravel.UI.Update()
+      W.ClearSent()
+      click(P.re)
+      W.Advance(0.6)
+      clicks = clicks + 1
+      if i % 2 == 1 then sent = sent + count(".at repath") end
+   end
+   eq(sent, 10, "jeder Klick bei erreichbarem Modul sendete einen Befehl")
+   eq(P.re.nClick, clicks, "alle Klicks kamen am Knopf an")
+end)
+
+test("UI.SetEnabled: Hervorhebung, wenn die Maus beim Freigeben schon auf dem Knopf liegt", function()
+   boot()
+   local UI = AutoTravel.UI
+   local b = UI.Button(_G.UIParent, 80, 20, "Test", function() end)
+   local colors = {}
+   b.SetBackdropColor = function(_, r, g, bl) colors[#colors + 1] = { r, g, bl } end
+
+   UI.SetEnabled(b, false, "Grund")
+   check(#colors == 1 and colors[1][1] == 0.13, "beim Sperren: Ruhefarben")
+
+   colors = {}
+   b.__over = false
+   UI.SetEnabled(b, true)
+   eq(#colors, 0, "Maus nicht darueber: keine Hervorhebung")
+
+   UI.SetEnabled(b, false, "Grund")
+   colors = {}
+   b.__over = true
+   UI.SetEnabled(b, true)
+   eq(#colors, 1, "Maus schon darueber: sofort hervorgehoben")
+   check(colors[1] and colors[1][1] == 0.19 and colors[1][3] == 0.27, "Hervorhebungsfarbe")
+
+   colors = {}
+   UI.SetEnabled(b, true)
+   UI.SetEnabled(b, true)
+   eq(#colors, 0, "wiederholtes Freigeben (UI.Update) faerbt nicht erneut")
+
+   -- ueber die Ersatzabfrage Frame:IsMouseOver, wenn es MouseIsOver nicht gibt
+   local saved = _G.MouseIsOver
+   _G.MouseIsOver = nil
+   UI.SetEnabled(b, false, "Grund")
+   colors = {}
+   UI.SetEnabled(b, true)
+   eq(#colors, 1, "ohne MouseIsOver greift Frame:IsMouseOver")
+   _G.MouseIsOver = saved
+end)
+
+test("UI.Button: OnEnter eines gesperrten Knopfes zeigt den Grund und hebt nichts hervor", function()
+   boot()
+   local UI = AutoTravel.UI
+   local b = UI.Button(_G.UIParent, 80, 20, "Test", function() end)
+   local tipCalls, colors, lines = 0, {}, {}
+   b.tip = function() tipCalls = tipCalls + 1 end
+   b.SetBackdropColor = function(_, r) colors[#colors + 1] = r end
+   _G.GameTooltip.AddLine = function(_, text) lines[#lines + 1] = text end
+
+   UI.SetEnabled(b, false, "Das ist der Grund")
+   colors = {}
+   b.__scripts.OnEnter(b)
+   eq(lines[1], "Das ist der Grund", "Tooltip nennt den Grund")
+   eq(tipCalls, 0, "der normale Tooltip bleibt aus")
+   eq(#colors, 0, "keine Hervorhebung")
+   eq(b.nEnter, 1, "Betreten gezaehlt")
+
+   UI.SetEnabled(b, true)
+   lines = {}
+   b.__scripts.OnEnter(b)
+   eq(tipCalls, 1, "freier Knopf zeigt seinen Tooltip")
+   check(#colors >= 1, "und wird hervorgehoben")
+   eq(b.nEnter, 2, "Betreten gezaehlt")
+   _G.GameTooltip.AddLine = nil
+end)
+
+-- Panel: Zustandsmatrix ---------------------------------------------------
+
+test("Panel: Uebernehmen und Neu berechnen ueber Reise x Modulzustand x Reisezustand", function()
+   ready()
+   local AT = AutoTravel
+   local P = _G.AutoTravelPanel
+   local function linked(ns) return ns ~= "ABSENT" and ns ~= "INCOMPATIBLE" and ns ~= "DISABLED" end
+   local notPausable = { COMBAT = true, PLAYER = true, IDLE = true, ARRIVED = true,
+                         FAILED = true, STARTING = true }
+   local nets = { "READY", "UNKNOWN", "HELLO", "ABSENT", "INCOMPATIBLE", "DISABLED" }
+   local states = { "IDLE", "STARTING", "REPATHING", "TRAVELING", "COMBAT", "PLAYER", "MOUNTING",
+                    "TAKEOFF", "TAXI", "TRANSPORT", "MANUAL", "ARRIVED", "FAILED" }
+   local cases = 0
+
+   for _, active in ipairs({ true, false }) do
+      for _, ns in ipairs(nets) do
+         for _, st in ipairs(states) do
+            AT.active = active
+            AT.status.state = st
+            AT.Net.state = ns
+            AT.UI.Update()
+            cases = cases + 1
+            local tag = string.format("aktiv=%s Modul=%s Zustand=%s", tostring(active), ns, st)
+            local noModule = "Kein Servermodul erreichbar (" .. ns .. "). '/at hello' fragt es erneut ab."
+
+            -- Neu berechnen: frei, solange eine Reise laeuft oder das Modul erreichbar ist
+            local wantRe = active or linked(ns)
+            eq(P.re:IsEnabled() ~= nil, wantRe, tag .. ": Neu berechnen frei")
+            if not wantRe then eq(P.re.disabledTip, noModule, tag .. ": Grund bei Neu berechnen") end
+
+            -- Uebernehmen / Weiter
+            local canResume = active and st == "PLAYER" and linked(ns)
+            local canPause = active and not notPausable[st] and linked(ns)
+            if canResume then
+               eq(P.pause.label:GetText(), "|cff53d17aWeiter|r", tag .. ": Beschriftung Weiter")
+               eq(P.pause:IsEnabled() ~= nil, true, tag .. ": Weiter frei")
+            else
+               eq(P.pause.label:GetText(), "Übernehmen", tag .. ": Beschriftung Uebernehmen")
+               local want = canPause
+               if not active then want = linked(ns) end
+               eq(P.pause:IsEnabled() ~= nil, want, tag .. ": Uebernehmen frei")
+               if not want then
+                  local tip = P.pause.disabledTip
+                  check(type(tip) == "string" and tip ~= "", tag .. ": Grund vorhanden")
+                  if not active then
+                     eq(tip, noModule, tag .. ": Grund ohne Reise")
+                  elseif st == "COMBAT" then
+                     eq(tip, "Im Kampf hast du die Kontrolle ohnehin. Danach geht es von selbst weiter.",
+                        tag .. ": Grund im Kampf")
+                  elseif linked(ns) then
+                     eq(tip, "In diesem Zustand (" .. st .. ") ist keine Übernahme nötig.",
+                        tag .. ": Grund im Zustand")
+                  end
+               end
+            end
+         end
+      end
+   end
+   eq(cases, 2 * 6 * 13, "alle Kombinationen geprueft")
+end)
+
+-- Klicks auf das Panel --------------------------------------------------------
+
+test("Neu berechnen ohne bekannte Reise sendet 'at repath'; ohne Modul geht nichts hinaus", function()
+   ready()
+   settle()
+   local P = _G.AutoTravelPanel
+   AutoTravel.active = false
+   AutoTravel.status.state = "IDLE"
+   AutoTravel.UI.Update()
+   check(P.re:IsEnabled() ~= nil, "Knopf frei")
+   click(P.re)
+   W.Advance(1)
+   sentIs({ ".at repath" }, "ein 'at repath'")
+
+   W.ClearSent()
+   status("TRAVELING|300|Ziel|8|20|0|1|1|10")
+   click(P.re)
+   W.Advance(1)
+   sentIs({ ".at repath" }, "auch mit bekannter Reise")
+
+   AutoTravel.active = false
+   AutoTravel.Net.state = "ABSENT"
+   AutoTravel.UI.Update()
+   eq(P.re:IsEnabled(), nil, "ohne Modul gesperrt")
+   W.ClearSent()
+   local n = msgCount()
+   click(P.re)
+   W.Advance(2)
+   eq(#W.sent, 0, "nichts gesendet")
+   eq(#messagesSince(n), 0, "keine Meldung")
+end)
+
+test("Uebernehmen sendet je nach Lage Pause, Weiter oder Pause mit Statusabfrage", function()
+   ready()
+   settle()
+   local P = _G.AutoTravelPanel
+
+   -- Reise laeuft: Pause
+   status("TRAVELING|300|Ziel|8|20|0|1|1|10")
+   click(P.pause)
+   W.Advance(1)
+   sentIs({ ".at pause" }, "waehrend der Fahrt: Pause")
+
+   -- uebernommen: der Knopf heisst Weiter und sendet resume
+   status("PLAYER|300|Ziel|16|0|0|1|1|10")
+   eq(P.pause.label:GetText(), "|cff53d17aWeiter|r", "Beschriftung Weiter")
+   W.ClearSent()
+   click(P.pause)
+   W.Advance(1)
+   sentIs({ ".at resume" }, "bei der Uebergabe: Weiter")
+
+   -- Kampf: gesperrt, nichts gesendet, nichts gemeldet
+   status("COMBAT|300|Ziel|0|0|0|1|1|10")
+   eq(P.pause:IsEnabled(), nil, "im Kampf gesperrt")
+   W.ClearSent()
+   local n = msgCount()
+   click(P.pause)
+   W.Advance(2)
+   eq(#W.sent, 0, "im Kampf nichts gesendet")
+   eq(#messagesSince(n), 0, "im Kampf keine Meldung")
+
+   -- Flug: der Server bekommt die Pause und erklaert
+   status("TAXI|900|Ziel|0|0|0|1|2|10")
+   eq(P.pause:IsEnabled(), 1, "im Flug frei")
+   W.ClearSent()
+   click(P.pause)
+   W.Advance(1)
+   sentIs({ ".at pause" }, "im Flug: Pause")
+
+   -- keine Reise bekannt, Modul da: Pause und Statusabfrage
+   status("IDLE|0|-|0|0|0|0|0|0")
+   eq(P.pause:IsEnabled(), 1, "ohne bekannte Reise frei, solange das Modul da ist")
+   W.ClearSent()
+   click(P.pause)
+   W.Advance(1)
+   sentIs({ ".at pause", ".at status" }, "ohne bekannte Reise: Pause und Statusabfrage")
+
+   -- Modul fehlt: gesperrt
+   AutoTravel.Net.state = "ABSENT"
+   AutoTravel.UI.Update()
+   eq(P.pause:IsEnabled(), nil, "ohne Modul gesperrt")
+   W.ClearSent()
+   click(P.pause)
+   W.Advance(2)
+   eq(#W.sent, 0, "ohne Modul nichts gesendet")
+end)
+
+test("Minimap-Knopf: Mittelklick uebernimmt auch ohne bekannte Reise (AT.UI-unabhaengig)", function()
+   ready()
+   settle()
+   local mini = _G.AutoTravelMinimapButton
+   check(mini ~= nil, "Minimap-Knopf vorhanden")
+   mini.__scripts.OnClick(mini, "MiddleButton")
+   W.Advance(1)
+   sentIs({ ".at pause", ".at status" }, "Mittelklick: Pause und Statusabfrage")
+end)
+
+test("ohne Oberflaeche (AT.UI fehlt) laufen Uebergabe und Netz fehlerfrei", function()
+   ready()
+   settle()
+   local AT = AutoTravel
+   local saved = AT.UI
+   AT.UI = nil
+   local ok, err = pcall(function()
+      AT.Handover.Toggle()                               -- ohne Reise
+      status("TRAVELING|300|Ziel|8|20|0|1|1|10")
+      AT.Handover.Toggle()                               -- Pause
+      status("PLAYER|300|Ziel|16|0|0|1|1|10")
+      AT.Handover.Toggle()                               -- Weiter
+      W.Advance(30)
+      status("IDLE|0|-|0|0|0|0|0|0")
+      W.ServerLine("[AT]H|1.0|1|0|0|0|2|0|0")            -- Modul zu alt: bricht die Reise lokal ab
+   end)
+   AT.UI = saved
+   check(ok, "kein Fehler: " .. tostring(err))
+end)
+
+local ICON_BEAR, ICON_CAT = "Ability_Racial_BearForm", "Ability_Druid_CatForm"
+
+-- Einen Druiden einrichten; 'active' ist der Name der aktiven Gestalt oder nil.
+local function druid(active, level, talents)
+   W.world.class = "DRUID"
+   W.world.level = level or 80
+   W.world.talents = talents or { 0, 0, 0 }
+   W.world.spells = {
+      [5487]  = { "Baergestalt", ICON_BEAR },
+      [9634]  = { "Terrorbaergestalt", ICON_BEAR },
+      [768]   = { "Katzengestalt", ICON_CAT },
+      [24858] = { "Mondkingestalt", "Spell_Nature_ForceOfNature" },
+      [33891] = { "Baum des Lebens", "Ability_Druid_TreeofLife" },
+   }
+   local function form(name, icon) return { name = name, icon = icon, active = (name == active) } end
+   W.world.forms = {
+      form("Wassergestalt", "Ability_Druid_AquaticForm"),
+      form("Baergestalt", ICON_BEAR),
+      form("Katzengestalt", ICON_CAT),
+      form("Reisegestalt", "Ability_Druid_TravelForm"),
+      form("Mondkingestalt", "Spell_Nature_ForceOfNature"),
+      form("Baum des Lebens", "Ability_Druid_TreeofLife"),
+   }
+end
+
+-- Diagnosebefehle ------------------------------------------------------------
+
+test("/at ui: laeuft mit und ohne Panel fehlerfrei und nennt den Zustand der Knoepfe", function()
+   ready()
+   settle()
+   local P = _G.AutoTravelPanel
+
+   local n = msgCount()
+   local ok, err = pcall(SlashCmdList["AUTOTRAVEL"], "ui")
+   check(ok, "mit Panel: " .. tostring(err))
+   local m = messagesSince(n)
+   check(#m >= 3, "drei Zeilen (waren " .. #m .. ")")
+   check(anyMessage(m, "Uebernehmen frei, Neu berechnen frei, START frei"), "Zustand der Knoepfe")
+   check(anyMessage(m, "Modul=READY"), "Modulzustand")
+   check(anyMessage(m, "OnEnter 0 x, OnClick 0 x"), "Zaehler")
+   check(anyMessage(m, "Unter der Maus: nichts"), "kein Fokus")
+
+   -- gesperrter Knopf, Maus darauf, Klicks werden gezaehlt
+   AutoTravel.Net.state = "ABSENT"
+   AutoTravel.UI.Update()
+   click(P.pause)
+   P.pause.__scripts.OnEnter(P.pause)
+   W.world.focus = P.pause
+   n = msgCount()
+   ok, err = pcall(SlashCmdList["AUTOTRAVEL"], "ui")
+   check(ok, "gesperrt: " .. tostring(err))
+   m = messagesSince(n)
+   check(anyMessage(m, "Uebernehmen GESPERRT, Neu berechnen GESPERRT"), "gesperrt gemeldet")
+   check(anyMessage(m, "OnEnter 1 x, OnClick 1 x"), "Zaehler zaehlen auch gesperrte Klicks")
+   check(anyMessage(m, "Alpha 0.45"), "Abblendung")
+   check(anyMessage(m, "Unter der Maus: Übernehmen"), "Fokus erkannt")
+
+   -- ein fremder Frame unter der Maus
+   W.world.focus = _G.UIParent
+   n = msgCount()
+   ok, err = pcall(SlashCmdList["AUTOTRAVEL"], "ui")
+   check(ok, "fremder Frame: " .. tostring(err))
+   check(anyMessage(messagesSince(n), "Unter der Maus: UIParent"), "Name des fremden Frames")
+
+   -- ohne Panel (z. B. vor dem Anmelden)
+   _G.AutoTravelPanel = nil
+   n = msgCount()
+   ok, err = pcall(SlashCmdList["AUTOTRAVEL"], "ui")
+   check(ok, "ohne Panel: " .. tostring(err))
+   m = messagesSince(n)
+   check(anyMessage(m, "Uebernehmen fehlt, Neu berechnen fehlt, START fehlt"), "fehlt gemeldet")
+   _G.AutoTravelPanel = P
+end)
+
+test("/at strat: meldet Gestalt und Formen und fragt die Strategien des Bots ab", function()
+   ready()
+   settle()
+   local B = AutoTravel.Bot
+
+   -- kein Druide
+   local n = msgCount()
+   local ok, err = pcall(SlashCmdList["AUTOTRAVEL"], "strat")
+   check(ok, "als Krieger: " .. tostring(err))
+   check(anyMessage(messagesSince(n), "Gestalt: keine  |  gesendet: -"), "keine Gestalt")
+   W.Advance(3)
+   check(hasWhisper("co ?") and hasWhisper("nc ?"), "beide Abfragen gefluestert")
+
+   -- Druide in Katzengestalt
+   W.ClearSent()
+   druid("Katzengestalt")
+   n = msgCount()
+   ok, err = pcall(SlashCmdList["AUTOTRAVEL"], "strat")
+   check(ok, "als Druide: " .. tostring(err))
+   local m = messagesSince(n)
+   check(anyMessage(m, "Gestalt: cat  |  gesendet: -"), "Katze erkannt")
+   check(anyMessage(m, "Form 3: Katzengestalt"), "Formliste")
+   check(anyMessage(m, "AKTIV"), "aktive Form markiert")
+   W.Advance(3)
+   check(hasWhisper("co ?") and hasWhisper("nc ?"), "beide Abfragen gefluestert")
+   check(B.formStrategy == nil, "die Diagnose aendert nichts am Bot")
+end)
+
+-- Playerbot: Strategien und Druidengestalt -----------------------------------
+
+test("Bot.DruidForm: erkennt die Gestalt ueber die Zauber, Reise- und Wassergestalt zaehlen nicht", function()
+   ready()
+   local B = AutoTravel.Bot
+   eq(B.DruidForm(), nil, "Krieger")
+
+   druid(nil)
+   eq(B.DruidForm(), nil, "Druide ohne Gestalt")
+   for _, c in ipairs({ { "Katzengestalt", "cat" }, { "Baergestalt", "bear" },
+                        { "Mondkingestalt", "balance" }, { "Baum des Lebens", "resto" },
+                        { "Reisegestalt", nil }, { "Wassergestalt", nil } }) do
+      druid(c[1])
+      eq(B.DruidForm(), c[2], "Gestalt " .. c[1])
+   end
+
+   W.world.forms = { { name = "Terrorbaergestalt", icon = ICON_BEAR, active = true } }
+   eq(B.DruidForm(), "bear", "Terrorbaer")
+   -- Name weicht ab (andere Sprache), das Symbol passt
+   W.world.forms = { { name = "Cat Form", icon = ICON_CAT, active = true } }
+   eq(B.DruidForm(), "cat", "Katze ueber das Symbol")
+   W.world.forms = { { name = "Bear Form", icon = ICON_BEAR, active = true } }
+   eq(B.DruidForm(), "bear", "Baer ueber das Symbol")
+
+   -- kein Druide: die Gestalt zaehlt nicht
+   W.world.class = "PRIEST"
+   eq(B.DruidForm(), nil, "Priester")
+
+   -- ohne die API laeuft es nicht in den Fehler
+   W.world.class = "DRUID"
+   local saved = _G.GetShapeshiftFormInfo
+   _G.GetShapeshiftFormInfo = nil
+   eq(B.DruidForm(), nil, "ohne GetShapeshiftFormInfo")
+   _G.GetShapeshiftFormInfo = saved
+end)
+
+test("Bot.IsFeralSpec: Wilder Kampf erst ab Stufe 10 und bei den meisten Punkten (Gleichstand: erster Baum)", function()
+   ready()
+   local B = AutoTravel.Bot
+   local function feral(level, t) W.world.level = level W.world.talents = t return B.IsFeralSpec() end
+   eq(feral(80, { 0, 51, 20 }), true, "Wilder Kampf vorn")
+   eq(feral(9, { 0, 5, 0 }), false, "unter Stufe 10 immer Gleichgewicht")
+   eq(feral(10, { 0, 1, 0 }), true, "ab Stufe 10")
+   eq(feral(80, { 0, 0, 0 }), false, "ohne Punkte")
+   eq(feral(80, { 51, 10, 10 }), false, "Gleichgewicht vorn")
+   eq(feral(80, { 10, 10, 0 }), false, "Gleichstand: der erste Baum gewinnt")
+   eq(feral(80, { 0, 10, 10 }), true, "Gleichstand zwischen Wilder Kampf und Wiederherstellung: der erste (Wilder Kampf)")
+   eq(feral(80, { 0, 0, 31 }), false, "Wiederherstellung vorn")
+
+   local saved = _G.GetTalentTabInfo
+   _G.GetTalentTabInfo = nil
+   eq(B.IsFeralSpec(), false, "ohne API")
+   _G.GetTalentTabInfo = saved
+   local savedLevel = _G.UnitLevel
+   _G.UnitLevel = nil
+   eq(B.IsFeralSpec(), false, "ohne UnitLevel")
+   _G.UnitLevel = savedLevel
+end)
+
+test("Bot.FormCommand: Baer und Katze ohne Wilden Kampf schalten aoe, cc, boost und cure ab", function()
+   ready()
+   local B = AutoTravel.Bot
+   W.world.level = 80
+   eq(B.FormCommand(nil), nil, "keine Gestalt")
+
+   W.world.talents = { 51, 10, 0 }                       -- Gleichgewicht
+   eq(B.FormCommand("bear"), "co +bear,-aoe,-cc,-boost,-cure", "Baer ohne Wilden Kampf")
+   eq(B.FormCommand("cat"), "co +cat,-aoe,-cc,-boost,-cure", "Katze ohne Wilden Kampf")
+   eq(B.FormCommand("balance"), "co +balance", "Eule")
+   eq(B.FormCommand("resto"), "co +resto", "Baum")
+
+   W.world.talents = { 0, 51, 10 }                       -- Wilder Kampf
+   eq(B.FormCommand("bear"), "co +bear", "Baer mit Wildem Kampf")
+   eq(B.FormCommand("cat"), "co +cat", "Katze mit Wildem Kampf")
+end)
+
+test("feste Profile setzen weder +heal noch +dps allein (Klassenstrategien, Druidensicherheit)", function()
+   boot()
+   local B = AutoTravel.Bot
+   for _, d in ipairs(B.Builtin) do
+      check(not d.combat:find("+heal", 1, true), d.key .. ": kein '+heal' in " .. d.combat)
+      check(not d.combat:find("+dps,", 1, true), d.key .. ": kein '+dps,' in " .. d.combat)
+      check(not d.combat:find("%+dps$"), d.key .. ": kein '+dps' am Ende")
+      for tok in d.combat:gmatch("[^,]+") do
+         check(tok ~= "+dps" and tok ~= "+heal", d.key .. ": Strategie '" .. tok .. "'")
+      end
+   end
+   -- wer kaempfen soll, setzt "dps assist" (Angreifer als Ziel), das klassenneutral ist
+   for _, key in ipairs({ "verteidigen", "normal", "aggressiv", "plus" }) do
+      check(B.Find(key).combat:find("+dps assist", 1, true) ~= nil, key .. ": +dps assist")
+   end
+   -- Minimal und Aengstlich bleiben bei den Verboten
+   check(B.Find("minimal").combat:find("-dps", 1, true) ~= nil, "Minimal: -dps")
+   check(B.Find("aengstlich").combat:find("-dps", 1, true) ~= nil, "Aengstlich: -dps")
+end)
+
+test("Bot.ApplyProfile(true) sendet nur die Kampfstrategien und die Gestalt, keine Zaehlung, kein nc", function()
+   ready()
+   settle()
+   local B = AutoTravel.Bot
+   AutoTravel.Set("Profile", "normal")
+   druid("Katzengestalt", 80, { 51, 10, 0 })
+
+   local count0, msgs0 = B.applyCount, msgCount()
+   B.ApplyProfile(true)
+   W.Advance(6)
+   local w = whispers()
+   eq(#w, 3, "drei Fluesternachrichten")
+   eq(w[1], "co !", "zuerst 'co !'")
+   eq(w[2], "co +dps assist,+aoe,+avoid aoe,-grind", "die Kampfstrategien des Profils")
+   eq(w[3], "co +cat,-aoe,-cc,-boost,-cure", "als letztes die Gestalt")
+   for _, t in ipairs(w) do check(t:sub(1, 3) ~= "nc ", "kein nc-Befehl: " .. t) end
+   check(not hasWhisper("ll normal"), "keine Zusatzbefehle")
+   check(not W.SentContains(".at set grace"), "keine Wartezeit")
+   eq(B.applyCount, count0, "applyCount nicht erhoeht")
+   eq(msgCount(), msgs0, "keine Profilmeldung")
+   eq(B.formStrategy, "cat", "Gestalt gemerkt")
+
+   -- die volle Anwendung zaehlt, sendet nc und die Gestalt zuletzt
+   W.ClearSent()
+   B.ApplyProfile()
+   W.Advance(10)
+   w = whispers()
+   eq(B.applyCount, count0 + 1, "applyCount erhoeht")
+   check(hasWhisper("nc !"), "nc ! gesendet")
+   check(hasWhisper("nc +loot,-gather,-grind,-new rpg,-follow,+food"), "nc-Strategien gesendet")
+   check(hasWhisper("ll normal"), "Zusatzbefehl gesendet")
+   check(W.SentContains(".at set grace 7"), "Wartezeit gesendet")
+   eq(w[#w], "co +cat,-aoe,-cc,-boost,-cure", "die Gestalt steht auch hier zuletzt")
+
+   -- Profilnachricht erscheint nur bei der vollen Anwendung
+   check(anyMessage(messagesSince(msgs0), "Profil:"), "Meldung bei voller Anwendung")
+end)
+
+test("Bot.ApplyProfile(true) bei eigenem Profil: Kampfflaggen ja, nc und Zusatzbefehle nein", function()
+   ready()
+   settle()
+   local B = AutoTravel.Bot
+   local c = B.CustomSlot(1)
+   c.name = "Test"
+   c.combat.dps = true
+   c.noncombat.loot = true
+   c.extra = "ll normal"
+   AutoTravel.Set("Profile", "custom1")
+   druid("Katzengestalt", 80, { 0, 51, 0 })
+
+   B.ApplyProfile(true)
+   W.Advance(8)
+   local w = whispers()
+   check(#w >= 3, "mindestens co !, Flaggenliste und Gestalt")
+   eq(w[1], "co !", "zuerst 'co !'")
+   eq(w[#w], "co +cat", "zuletzt die Gestalt (Wilder Kampf: ohne Abschaltungen)")
+   for i = 2, #w - 1 do check(w[i]:sub(1, 3) == "co ", "nur Kampfstrategien: " .. w[i]) end
+   check(not hasWhisper("ll normal"), "kein Zusatzbefehl")
+   check(not anyWhisperMatches("nc "), "kein nc")
+end)
+
+test("Bot.ApplyProfile ohne Druide sendet keinen Gestaltbefehl; ohne Playerbot-Steuerung nichts", function()
+   ready()
+   settle()
+   local B = AutoTravel.Bot
+   AutoTravel.Set("Profile", "verteidigen")
+   B.ApplyProfile(true)
+   W.Advance(5)
+   local w = whispers()
+   eq(#w, 2, "co ! und die Kampfstrategien")
+   eq(B.formStrategy, nil, "keine Gestalt")
+
+   AutoTravel.Set("BotControl", 0)
+   W.ClearSent()
+   B.ApplyProfile(true)
+   B.ApplyProfile()
+   W.Advance(5)
+   eq(#whispers(), 0, "ohne Steuerung nichts")
+end)
+
+test("Gestaltwechsel: UPDATE_SHAPESHIFT_FORM sendet nach der Entprellung genau einmal und nur bei Aenderung", function()
+   ready()
+   local B = AutoTravel.Bot
+   AutoTravel.Set("Profile", "normal")
+   druid("Katzengestalt", 80, { 51, 10, 0 })
+   B.Enable()
+   W.ServerLine("SelfBot is now active.")
+   W.Advance(10)
+   check(B.IsRunning(), "Bot laeuft")
+   eq(B.formStrategy, "cat", "Katze gesendet")
+   W.ClearSent()
+   local applied = B.applyCount
+
+   -- Ereignisse ohne Gestaltwechsel: nichts geht hinaus
+   for _ = 1, 3 do W.Fire("UPDATE_SHAPESHIFT_FORM") W.Advance(0.1) end
+   W.Advance(5)
+   eq(#whispers(), 0, "gleiche Gestalt: nichts gesendet")
+
+   -- Wechsel auf den Baeren, mehrere Ereignisse dicht hintereinander
+   druid("Baergestalt", 80, { 51, 10, 0 })
+   for _ = 1, 3 do W.Fire("UPDATE_SHAPESHIFT_FORM") W.Advance(0.1) end
+   W.Advance(0.4)
+   eq(#whispers(), 0, "noch in der Entprellung")
+   W.Advance(6)
+   local w = whispers()
+   local resets = 0
+   for _, t in ipairs(w) do if t == "co !" then resets = resets + 1 end end
+   eq(resets, 1, "genau eine Neusendung")
+   eq(#w, 3, "co !, Profilstrategien, Gestalt")
+   eq(w[#w], "co +bear,-aoe,-cc,-boost,-cure", "Baer ohne Wilden Kampf")
+   check(not anyWhisperMatches("nc "), "kein nc")
+   eq(B.applyCount, applied, "applyCount unveraendert")
+   eq(B.formStrategy, "bear", "Gestalt gemerkt")
+
+   -- noch ein Ereignis, Gestalt unveraendert: nichts
+   W.ClearSent()
+   W.Fire("UPDATE_SHAPESHIFT_FORM")
+   W.Advance(5)
+   eq(#whispers(), 0, "unveraendert: nichts")
+
+   -- Reisegestalt: die Strategie der Gestalt entfaellt
+   druid("Reisegestalt", 80, { 51, 10, 0 })
+   W.Fire("UPDATE_SHAPESHIFT_FORM")
+   W.Advance(5)
+   w = whispers()
+   eq(#w, 2, "co ! und Profilstrategien, kein Gestaltbefehl")
+   eq(B.formStrategy, nil, "keine Gestaltstrategie")
+
+   -- Bot aus: kein Senden
+   W.ServerLine("SelfBot is now deactivated.")
+   W.ClearSent()
+   druid("Katzengestalt", 80, { 51, 10, 0 })
+   W.Fire("UPDATE_SHAPESHIFT_FORM")
+   W.Advance(5)
+   eq(#whispers(), 0, "Bot laeuft nicht: nichts gesendet")
+
+   -- Steuerung aus: kein Senden
+   W.ServerLine("SelfBot is now active.")
+   AutoTravel.Set("BotControl", 0)
+   druid("Baergestalt", 80, { 51, 10, 0 })
+   W.Fire("UPDATE_SHAPESHIFT_FORM")
+   W.Advance(5)
+   eq(#whispers(), 0, "ohne Playerbot-Steuerung nichts gesendet")
+end)
+
+test("Gestaltwechsel bei Nicht-Druiden: Ereignis bleibt folgenlos", function()
+   ready()
+   local B = AutoTravel.Bot
+   B.Enable()
+   W.ServerLine("SelfBot is now active.")
+   W.Advance(10)
+   W.ClearSent()
+   W.Fire("UPDATE_SHAPESHIFT_FORM")
+   W.Advance(5)
+   eq(#whispers(), 0, "nichts gesendet")
 end)
 
 print(string.format("\n%d Pruefungen, %d Fehler", passes, failures))

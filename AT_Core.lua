@@ -35,7 +35,7 @@ local AT = AutoTravel
 local CB = AT.Carb
 local N  = AT.Net
 
-AT.VERSION = "11.3"
+AT.VERSION = "11.4"
 local PREFIX = "|cff33ccffAutoTravel|r: "
 
 -- Anzeigenamen fuer Optionen -> Tastaturbelegung (siehe Bindings.xml).
@@ -690,6 +690,8 @@ local function Help()
       "/at panel             Fenster an/aus",
       "/at optionen          Einstellungsseite oeffnen",
       "/at debug             ausfuehrliche Ausgabe",
+      "/at ui                Diagnose: Zustand der Panel-Knoepfe",
+      "/at strat             Diagnose: Druidengestalt, aktive Bot-Strategien",
    }
    for _, s in ipairs(l) do DEFAULT_CHAT_FRAME:AddMessage("   " .. s) end
 end
@@ -707,6 +709,29 @@ SlashCmdList["AUTOTRAVEL"] = function(input)
    elseif cmd == "stop" then AT.Stop()
    elseif cmd == "repath" then AT.Repath()
    elseif cmd == "status" then AT.Send("at status", { key = "status" })
+   elseif cmd == "ui" then
+      -- Diagnose: warum reagiert ein Knopf nicht?
+      local P = _G.AutoTravelPanel
+      local function en(b) return b and (b:IsEnabled() and "frei" or "GESPERRT") or "fehlt" end
+      local f = GetMouseFocus and GetMouseFocus()
+      AT.Print(string.format("Panel: Uebernehmen %s, Neu berechnen %s, START %s | aktiv=%s Zustand=%s Modul=%s",
+         en(P and P.pause), en(P and P.re), en(P and P.go), tostring(AT.active),
+         tostring(AT.status.state), tostring(N.state)))
+      local which = (P and f == P.pause and "Übernehmen") or (P and f == P.re and "Neu berechnen")
+         or (P and f == P.go and "START") or (P and f == P.prof and "Profil")
+         or (P and f == P.tp and "Teleport") or (P and f == P.botBtn and "Bot")
+         or (P and f == P.heir and "Erbstücke")
+      local b = P and P.pause
+      if b then
+         AT.Print(string.format("Übernehmen: OnEnter %d x, OnClick %d x, Maus %s, sichtbar %s, Alpha %.2f, Skripte %s/%s",
+            b.nEnter or -1, b.nClick or -1, tostring(b:IsMouseEnabled()), tostring(b:IsVisible()),
+            b:GetEffectiveAlpha(), tostring(b:GetScript("OnEnter") ~= nil), tostring(b:GetScript("OnClick") ~= nil)))
+      end
+      local parent = f and f.GetParent and f:GetParent()
+      AT.Print("Unter der Maus: " .. tostring(which or (f and (f:GetName() or f:GetObjectType())) or "nichts")
+         .. " | Ebene " .. tostring(f and f.GetFrameLevel and f:GetFrameLevel())
+         .. " | Panel-Ebene " .. tostring(P and P.GetFrameLevel and P:GetFrameLevel())
+         .. " | Elternteil " .. tostring(parent and (parent:GetName() or parent:GetObjectType())))
    elseif cmd == "tp" or cmd == "teleport" then AT.Teleport()
    elseif cmd == "pause" then
       if not AT.Handover.Pause() then AT.Print("Gerade nicht moeglich.") end
@@ -794,6 +819,21 @@ SlashCmdList["AUTOTRAVEL"] = function(input)
 
    elseif cmd == "botan" then AT.Bot.Enable()
    elseif cmd == "botaus" then AT.Bot.Disable()
+
+   elseif cmd == "strat" then
+      -- Diagnose: der Bot antwortet mit seinen aktiven Strategien (Kampf / ausser Kampf)
+      local form = AT.Bot.DruidForm and AT.Bot.DruidForm()
+      AT.Print("Gestalt: " .. tostring(form or "keine") ..
+               "  |  gesendet: " .. tostring(AT.Bot.formStrategy or "-"))
+      if GetNumShapeshiftForms and GetShapeshiftFormInfo then
+         for i = 1, GetNumShapeshiftForms() do
+            local icon, name, active = GetShapeshiftFormInfo(i)
+            AT.Print(string.format("   Form %d: %s  %s  %s", i, tostring(name),
+                     tostring(icon), active and "|cff53d17aAKTIV|r" or "-"))
+         end
+      end
+      AT.Queue(function() SendChatMessage("co ?", "WHISPER", nil, UnitName("player")) end, "bot")
+      AT.Queue(function() SendChatMessage("nc ?", "WHISPER", nil, UnitName("player")) end, "bot")
 
    elseif cmd == "bot" then
       if rest == "status" then
