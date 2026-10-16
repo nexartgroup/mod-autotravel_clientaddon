@@ -2948,6 +2948,7 @@ local ID = {
    agility4        = 10309,   -- Scroll of Agility IV         Stufe 40
    agility7        = 43463,   -- Scroll of Agility VII        Stufe 70
    strength8       = 43466,   -- Scroll of Strength VIII      Stufe 80
+   runescroll      = 49632,   -- Runescroll of Fortitude      eigener Platz, Stufe 80
    recall          = 37118,   -- Scroll of Recall             nicht in der Tabelle
    waterBreathing  = 5996,    -- Elixir of Water Breathing    nicht in der Tabelle
 }
@@ -2981,12 +2982,14 @@ local function awaitUse(maxSeconds)
    return nil
 end
 
--- Ein Charakter im Selbstmodus mit einem eigenen Profil, das die Arten erlaubt.
-local function consBoot(flags)
+-- Ein Charakter im Selbstmodus mit einem eigenen Profil, das die Arten erlaubt. Die Klasse bestimmt, welche
+-- Schriftrolle gewaehlt wird: der Schurke nimmt Beweglichkeit und hat keinen Dauerzauber (Jaeger).
+local function consBoot(flags, class)
    ready()
    local B = AutoTravel.Bot
    W.ServerLine("SelfBot is now active.")
    W.world.level = 80
+   W.world.class = class or "ROGUE"
    local c = B.CustomSlot(1)
    c.cons = flags or {}
    c.combat.dps = true                       -- ein Eintrag, damit das Profil als benutzt zaehlt
@@ -3021,13 +3024,14 @@ local function aurasOf(spells, noIds)
    return a
 end
 
-local function newState() return { slot = {}, item = {}, uses = {}, warned = {} } end
+local function newState() return { slot = {}, item = {}, peace = {}, uses = {}, warned = {} } end
 
 local function decide(list, spells, wanted, extra)
    extra = extra or {}
    return AutoTravel.Cons.Decide(stockOf(list), aurasOf(spells), {
       level = extra.level or 80, wanted = wanted, ignore = extra.ignore or {},
       state = extra.state or newState(), now = extra.now or 1000,
+      mode = extra.mode, stats = extra.stats, friendly = extra.friendly, afterAll = extra.afterAll,
    })
 end
 
@@ -3398,12 +3402,12 @@ test("Im Kampf: ohne Wirkung wird mehrfach versucht, dann der Gegenstand gesperr
          break
       end
    end
-   eq(tries, 5, "fuenf Versuche, dann im Kampf nicht mehr")
+   eq(tries, AutoTravel.Cons.MAX_TRIES, "so viele Versuche, dann im Kampf nicht mehr")
    local warned = false
    for _, m in ipairs(W.messages) do if m:find("liess sich im Kampf nicht benutzen", 1, true) then warned = true end end
    check(warned, "der Spieler erfaehrt, dass es nach dem Kampf versucht wird")
    eq(W.CountOf(ID.mightyAgility), 1, "nichts wurde verbraucht")
-   check(AutoTravel.Cons.state.peace[ID.mightyAgility] == true, "als 'nur nach dem Kampf' gemerkt")
+   check(AutoTravel.Cons.state.peace[ID.mightyAgility] ~= nil, "als 'nur nach dem Kampf' gemerkt")
 end)
 
 local function endFight()
@@ -3414,11 +3418,12 @@ end
 test("Nach dem Kampf: was im Kampf nicht ging, wird danach nachgeholt und im Kampf nicht mehr versucht", function()
    consBoot({ elixir = true })
    W.Give(ID.mongoose, 3)
+   local tries = AutoTravel.Cons.MAX_TRIES
    startFight()
-   for _ = 1, 5 do awaitUse(12) end
-   eq(#useWhispers(), 5, "fuenf Versuche im Kampf")
+   for _ = 1, tries do awaitUse(12) end
+   eq(#useWhispers(), tries, "so viele Versuche im Kampf")
    W.Advance(40)
-   eq(#useWhispers(), 5, "danach im Kampf nichts mehr")
+   eq(#useWhispers(), tries, "danach im Kampf nichts mehr")
 
    endFight()
    local id = awaitUse(5)
@@ -3449,16 +3454,16 @@ test("Nach dem Kampf: das Zeitfenster ist begrenzt, und ein erneuter Fehlschlag 
    endFight()
    W.Advance(30)                                    -- das Fenster von 25 s verstreicht ohne Befehl? nein: es wird versucht
    local n = #useWhispers()
-   check(n >= 1 and n <= 7, "im Fenster wird versucht, aber nicht ewig: " .. n)
+   eq(n, AutoTravel.Cons.MAX_TRIES, "im Fenster wird versucht, aber nur so oft wie erlaubt")
    local warned = false
    for _, m in ipairs(W.messages) do if m:find("Pause: 90 s", 1, true) then warned = true end end
-   check(warned, "nach fuenf Fehlschlaegen auch danach: gesperrt")
+   check(warned, "nach den Fehlschlaegen auch danach: gesperrt")
    W.Advance(100)
    eq(#useWhispers(), n, "ausserhalb des Fensters nichts mehr")
 end)
 
 test("Nach dem Kampf: nur das Nachzuholende, nichts anderes", function()
-   consBoot({ elixir = true, scroll = true })
+   consBoot({ elixir = true, scroll = true }, "WARRIOR")      -- der Krieger nimmt Staerke
    W.Give(ID.mongoose, 1)
    AutoTravel.Cons.state.peace[ID.mongoose] = true  -- im Kampf ging es nicht
    startFight()
@@ -3675,6 +3680,628 @@ test("Taschen: mehrere Staepel und mehrere Taschen werden zusammengezaehlt", fun
    W.AddAura("Buff", spellOf(ID.agility7))
    W.Advance(3)
    eq(AutoTravel.Cons.state.total, 1, "als gelungen gezaehlt")
+end)
+
+-- ---------------------------------------------------------------------------
+-- 11.7: Befunde der dritten Pruefung (Schriftrollen sind EIN Platz, Jaeger, Bewegung, Sperren ...)
+-- ---------------------------------------------------------------------------
+
+-- Ein Modell des Servers fuer "u <Link>": UseItemAction::UseItem und die Regeln der Zauber.
+--   * Der Befehl wird nach 'delay' Sekunden ausgefuehrt; zaubert der Charakter dann, wartet er.
+--   * Er scheitert still, wenn sich der Charakter bewegt (isMoving) oder ein Dauerzauber laeuft
+--     ('autorepeat': Automatisches Schiessen) oder 'refuse(id)' ihn abweist (staerkerer Buff ...).
+--   * Sonst wird ein Stueck verbraucht und der Buff gelegt. Ein neuer Buff VERDRAENGT jeden anderen
+--     derselben exklusiven Gruppe: die sechs Schriftrollenwerte (spell_group 1087), Kampfelixiere
+--     (Gruppe 1), Waechterelixiere (Gruppe 2; ein Flaeschchen steht in beiden).
+local function serverModel(o)
+   o = o or {}
+   local S = { delay = o.delay or 0.4, autorepeat = o.autorepeat, refuse = o.refuse,
+               queue = {}, seen = #W.sent, executed = {}, refused = {} }
+   local D, G = AutoTravel.ConsData, AutoTravel.ConsGroups
+
+   local function groupsOf(spell)
+      local g = {}
+      for _, d in pairs(D) do
+         if d[2] == spell then
+            if d[1] == "flask" then g.battle, g.guardian = true, true
+            elseif d[1] == "battle" then g.battle = true
+            elseif d[1] == "guardian" then g.guardian = true
+            elseif d[1] == "scroll" and d[5] ~= "fortitude" then g.scroll = true end
+         end
+      end
+      for _, sp in ipairs(G.battle) do if sp == spell then g.battle = true end end
+      for _, sp in ipairs(G.guardian) do if sp == spell then g.guardian = true end end
+      return g
+   end
+
+   local function applyBuff(spell)
+      local mine = groupsOf(spell)
+      for i = #W.world.auras, 1, -1 do
+         local other = groupsOf(W.world.auras[i].spellId)
+         for k in pairs(mine) do
+            if other[k] then table.remove(W.world.auras, i) break end
+         end
+      end
+      W.AddAura("Buff " .. spell, spell)
+   end
+
+   function S.run(id, now)
+      local why
+      if W.world.speed > 0 then why = "bewegt"
+      elseif S.autorepeat then why = "dauerzauber"
+      elseif S.refuse and S.refuse(id) then why = "abgewiesen"
+      elseif W.CountOf(id) == 0 then why = "nichts da" end
+      if why then
+         S.refused[#S.refused + 1] = { id = id, why = why, at = now }
+         return
+      end
+      W.TakeOne(id)
+      applyBuff(D[id][2])
+      S.executed[#S.executed + 1] = { id = id, at = now }
+   end
+
+   W.onStep = function(now)
+      if S.seen > #W.sent then S.seen = 0 end          -- W.ClearSent() leert die Liste
+      while S.seen < #W.sent do
+         S.seen = S.seen + 1
+         local t = W.sent[S.seen].text
+         if t:find("^u ") then S.queue[#S.queue + 1] = { id = idOf(t), due = now + S.delay } end
+      end
+      local i = 1
+      while i <= #S.queue do
+         local c = S.queue[i]
+         if now >= c.due and not (W.world.casting or W.world.channel) then
+            table.remove(S.queue, i)
+            S.run(c.id, now)
+         else
+            i = i + 1
+         end
+      end
+   end
+   return S
+end
+
+local function famOf(id) return AutoTravel.ConsData[id][5] end
+
+-- die hoechste Schriftrolle je Wert, die ein Charakter der Stufe 80 tragen darf
+local function topScrolls()
+   local best = {}
+   local D = AutoTravel.ConsData
+   for id, d in pairs(D) do
+      if d[1] == "scroll" and d[5] ~= "fortitude" and d[3] <= 80 then
+         local b = best[d[5]]
+         if not b or d[6] > D[b][6] then best[d[5]] = id end
+      end
+   end
+   return best
+end
+
+local function messageCount(needle)
+   local n = 0
+   for _, m in ipairs(W.messages) do if m:find(needle, 1, true) then n = n + 1 end end
+   return n
+end
+
+test("Verbrauchsgueter: die Gruppen des Servers passen zur Tabelle", function()
+   boot()
+   local G = AutoTravel.ConsGroups
+   check(type(G) == "table" and #G.battle >= 70 and #G.guardian >= 70, "beide Gruppen geladen")
+   local battle, guardian = {}, {}
+   for _, sp in ipairs(G.battle) do battle[sp] = true end
+   for _, sp in ipairs(G.guardian) do guardian[sp] = true end
+   for id, d in pairs(AutoTravel.ConsData) do
+      if d[1] == "flask" then
+         check(battle[d[2]] and guardian[d[2]], "Flaeschchen " .. id .. " steht in beiden Gruppen")
+      elseif d[1] == "battle" then
+         check(battle[d[2]] and not guardian[d[2]], "Kampfelixier " .. id .. " nur in der Kampfgruppe")
+      elseif d[1] == "guardian" then
+         check(guardian[d[2]] and not battle[d[2]], "Waechterelixier " .. id .. " nur in der Waechtergruppe")
+      end
+   end
+   check(battle[16323] and battle[10667], "Juju Power und R.O.I.D.S. stehen in der Kampfgruppe")
+   check(guardian[24382] and guardian[11319], "Spirit of Zanza und Wasserwandeln stehen in der Waechtergruppe")
+   -- die Runenschriftrolle gehoert nicht zu den sechs Werten
+   local fort = AutoTravel.ConsData[ID.runescroll]
+   eq(fort[5], "fortitude", "Runenschriftrolle der Seelenstaerke")
+end)
+
+test("Auswahl: die sechs Werte der Schriftrollen teilen sich EINEN Platz (spell_group 1087)", function()
+   boot()
+   local list = { [ID.agility7] = 1, [ID.strength8] = 1 }
+   local sc = { scroll = true }
+   -- Wirkt irgendeine Schriftrolle, ist der Platz belegt: der Server entfernte die alte, wenn eine
+   -- zweite eines anderen Werts kaeme, und die alte fehlte wieder.
+   eq(decide(list, { spellOf(ID.strength8) }, sc), nil, "Staerke wirkt: keine Beweglichkeit hinterher")
+   eq(decide(list, { spellOf(ID.agility7) }, sc), nil, "Beweglichkeit wirkt: keine Staerke hinterher")
+   eq(decide(list, { spellOf(ID.agility1) }, sc), nil, "auch eine niedrige Stufe belegt den Platz")
+   -- ohne Buff: genau EINE, nach der Vorliebe
+   local e, key = decide(list, {}, sc, { stats = { "strength", "agility" } })
+   eq(e and e.id, ID.strength8, "Staerke vorn") eq(key, "scroll", "ein Platz")
+   e = decide(list, {}, sc, { stats = { "agility", "strength" } })
+   eq(e and e.id, ID.agility7, "Beweglichkeit vorn")
+   -- fehlt die erste Vorliebe in den Taschen: die naechste
+   e = decide({ [ID.strength8] = 1 }, {}, sc, { stats = { "agility", "strength" } })
+   eq(e and e.id, ID.strength8, "keine Beweglichkeit da: Staerke")
+   -- ein Wert, der nicht in der Liste steht, wird nie benutzt; die Anzeige sagt warum
+   local why
+   e, _, why = decide({ [ID.strength8] = 1 }, {}, sc, { stats = { "agility", "intellect" } })
+   eq(e, nil, "Staerke steht nicht in der Liste")
+   check(table.concat(why, "\n"):find("Staerke", 1, true), "der Grund nennt den Wert")
+   -- ohne Liste (Tests, Anzeige): alle sechs, nie mehrere
+   e = decide(list, {}, sc)
+   check(e ~= nil, "ohne Liste gilt jeder Wert")
+end)
+
+test("Auswahl: die Runenschriftrolle der Seelenstaerke hat einen eigenen Platz", function()
+   boot()
+   local list = { [ID.agility7] = 1, [ID.runescroll] = 1 }
+   local sc = { scroll = true }
+   local st = { stats = { "agility" } }
+   local e, key = decide(list, { spellOf(ID.agility7) }, sc, st)
+   eq(e and e.id, ID.runescroll, "neben einer Schriftrolle wirkt sie") eq(key, "fortitude", "eigener Platz")
+   e = decide(list, { spellOf(ID.runescroll) }, sc, st)
+   eq(e and e.id, ID.agility7, "sie belegt den Wertplatz nicht")
+   eq(decide(list, { spellOf(ID.agility7), spellOf(ID.runescroll) }, sc, st), nil, "beide wirken")
+end)
+
+test("Auswahl: Zauber der Elixiergruppen, die kein Elixier sind (Juju, Zanza, Wasserwandeln), belegen den Platz", function()
+   boot()
+   local list = { [ID.mongoose] = 1, [ID.mightyFort] = 1, [ID.flaskRage] = 1 }
+   local el = { elixir = true }
+   -- Juju Power steht in der Kampfgruppe, Spirit of Zanza in der Waechtergruppe
+   local e, key = decide(list, { 16323 }, el)
+   eq(e and e.id, ID.mightyFort, "Juju Power belegt den Kampfplatz: nur das Waechterelixier") eq(key, "guardian", "Platz")
+   e = decide(list, { 24382 }, el)
+   eq(e and e.id, ID.mongoose, "Spirit of Zanza belegt den Waechterplatz: nur das Kampfelixier")
+   eq(decide(list, { 16323, 24382 }, el), nil, "beide belegt: nichts")
+   -- Wasserwandeln steht nicht in der Tabelle, belegt den Platz aber trotzdem
+   eq((decide(list, { 11319 }, el)).id, ID.mongoose, "Wasserwandeln belegt den Waechterplatz")
+   -- ein Flaeschchen wuerde das ersetzen
+   eq(decide({ [ID.flaskRage] = 1 }, { 16323 }, { flask = true }), nil, "unter Juju kein Flaeschchen")
+end)
+
+test("Auswahl: ein Flaeschchen folgt nicht auf ein Elixier, dessen Buff nicht zu sehen war", function()
+   boot()
+   local fl = { flask = true }
+   local st = newState()
+   st.slot.battle = { lastUse = 1000, verified = false }
+   eq(decide({ [ID.flaskRage] = 1 }, {}, fl, { state = st, now = 1100 }), nil, "das Elixier ist nicht zu sehen: kein Flaeschchen")
+   check(decide({ [ID.flaskRage] = 1 }, {}, fl, { state = st, now = 1601 }) ~= nil, "nach zehn Minuten schon")
+   st = newState()
+   st.slot.guardian = { lastUse = 1000, verified = false }
+   eq(decide({ [ID.flaskRage] = 1 }, {}, fl, { state = st, now = 1100 }), nil, "ebenso nach einem Waechterelixier")
+   st = newState()
+   st.slot.battle = { lastUse = 1000, verified = true }
+   check(decide({ [ID.flaskRage] = 1 }, {}, fl, { state = st, now = 1100 }) ~= nil, "war der Buff zu sehen: gilt nur der Abstand von 45 s")
+end)
+
+test("Auswahl: ein Verbuendeter als Ziel haelt Schriftrollen zurueck, Elixiere nicht", function()
+   boot()
+   local list = { [ID.agility7] = 1, [ID.runescroll] = 1, [ID.mongoose] = 1 }
+   local all = ALL()
+   local e = decide(list, {}, all, { friendly = true, stats = { "agility" } })
+   eq(e and e.id, ID.mongoose, "das Elixier ist ein Zauber auf sich selbst")
+   eq(decide(list, { spellOf(ID.mongoose) }, all, { friendly = true, stats = { "agility" } }), nil,
+      "Schriftrolle und Runenschriftrolle warten")
+   e = decide(list, { spellOf(ID.mongoose) }, all, { friendly = false, stats = { "agility" } })
+   eq(e and e.id, ID.agility7, "ohne Verbuendeten kommt die Schriftrolle")
+end)
+
+test("Auswahl: nach dem Kampf nur das Nachzuholende, nur Klassen ohne Kampfbenutzung alles", function()
+   boot()
+   local list = { [ID.mongoose] = 1, [ID.agility7] = 1 }
+   local all = ALL()
+   local st = newState()
+   eq(decide(list, {}, all, { state = st, mode = "after", stats = { "agility" } }), nil, "nichts nachzuholen")
+   local e = decide(list, {}, all, { state = st, mode = "after", afterAll = true, stats = { "agility" } })
+   eq(e and e.id, ID.mongoose, "afterAll: alles kommt nach dem Kampf dran")
+   st.peace[ID.mongoose] = 1000
+   e = decide(list, {}, all, { state = st, mode = "after", stats = { "agility" }, now = 1010 })
+   eq(e and e.id, ID.mongoose, "nur das, was im Kampf nicht ging")
+   -- im Kampf: ein gemerkter Gegenstand ist raus, bis die Frist verstrichen ist
+   e = decide(list, {}, all, { state = st, mode = "combat", stats = { "agility" }, now = 1010 })
+   eq(e and e.id, ID.agility7, "im Kampf nur der andere")
+   e = decide(list, {}, all, { state = st, mode = "combat", stats = { "agility" }, now = 1000 + AutoTravel.Cons.PEACE_DECAY + 1 })
+   eq(e and e.id, ID.mongoose, "nach der Frist wieder im Kampf")
+end)
+
+test("Schriftrollen: der Wert richtet sich nach Klasse und Talentbaum, '/at buffs wert' ueberschreibt", function()
+   boot()
+   local B, C = AutoTravel.Bot, AutoTravel.Cons
+   local function stats(class, talents)
+      W.world.class = class
+      W.world.talents = talents or { 0, 0, 0 }
+      local list, source = C.PreferredStats()
+      return table.concat(list, ","), source
+   end
+   eq((stats("MAGE")), "intellect,stamina,spirit", "Magier")
+   eq((stats("WARLOCK")), "intellect,stamina,spirit", "Hexenmeister")
+   eq((stats("PRIEST")), "intellect,spirit,stamina", "Priester")
+   eq((stats("ROGUE")), "agility,stamina,protection", "Schurke")
+   eq((stats("HUNTER")), "agility,stamina,protection", "Jaeger")
+   eq((stats("DEATHKNIGHT")), "strength,stamina,protection", "Todesritter")
+   eq((stats("WARRIOR")), "strength,stamina,protection", "Krieger ohne Talentpunkte")
+   eq((stats("WARRIOR", { 31, 5, 0 })), "strength,stamina,protection", "Waffen")
+   eq((stats("WARRIOR", { 5, 10, 31 })), "stamina,strength,protection", "Schutzkrieger")
+   eq((stats("PALADIN", { 31, 0, 0 })), "intellect,strength,stamina,protection", "Heiliger Paladin")
+   eq((stats("PALADIN", { 0, 31, 0 })), "stamina,strength,intellect,protection", "Schutzpaladin")
+   eq((stats("PALADIN", { 0, 0, 31 })), "strength,intellect,stamina,protection", "Vergeltungspaladin")
+   eq((stats("SHAMAN", { 31, 0, 0 })), "intellect,agility,stamina", "Elementarschamane")
+   eq((stats("SHAMAN", { 0, 31, 0 })), "agility,intellect,stamina", "Verstaerker")
+   eq((stats("DRUID", { 31, 0, 0 })), "intellect,agility,stamina", "Gleichgewicht")
+   eq((stats("DRUID", { 0, 31, 0 })), "agility,intellect,stamina", "Wilder Kampf")
+   -- Gleichstand: der erste Baum, wie beim Server
+   eq((stats("PALADIN", { 20, 20, 20 })), "intellect,strength,stamina,protection", "Gleichstand: erster Baum")
+   local _, source = stats("MAGE")
+   eq(source, "Klasse", "Quelle: Klasse")
+   _, source = stats("PALADIN", { 0, 0, 31 })
+   eq(source, "Klasse und Talentbaum", "Quelle: Klasse und Talentbaum")
+   -- unbekannte Klasse: Werte, die jedem helfen
+   local list
+   list, source = (function() W.world.class = "GNOME" return C.PreferredStats() end)()
+   eq(table.concat(list, ","), "stamina,protection", "unbekannte Klasse")
+   eq(source, "Klasse unbekannt", "Quelle: unbekannt")
+
+   -- Ueberschreiben
+   W.world.class = "MAGE"
+   B.Global().consStat = "spirit"
+   list, source = C.PreferredStats()
+   eq(table.concat(list, ","), "spirit", "eingestellter Wert") eq(source, "eingestellt", "Quelle: eingestellt")
+   B.Global().consStat = "fortitude"                  -- keiner der sechs
+   eq(table.concat((C.PreferredStats()), ","), "intellect,stamina,spirit", "fortitude gilt nicht")
+   B.Global().consStat = 5
+   eq(table.concat((C.PreferredStats()), ","), "intellect,stamina,spirit", "beschaedigter Eintrag gilt nicht")
+   B.Global().consStat = nil
+end)
+
+test("/at buffs wert: Anzeige, einstellen, Umlaute, englische Namen, auto, Unsinn", function()
+   local B = consBoot(ALL(), "MAGE")
+   local slash = SlashCmdList["AUTOTRAVEL"]
+   local function say(cmd)
+      local n0 = #W.messages
+      slash(cmd)
+      return table.concat(W.messages, "\n", n0 + 1)
+   end
+   check(say("buffs wert"):find("Intelligenz, Ausdauer, Willenskraft", 1, true), "ohne Wert: die Auswahl der Klasse")
+   check(say("buffs wert staerke"):find("Staerke", 1, true), "gesetzt")
+   eq(B.Global().consStat, "strength", "gespeichert: Staerke")
+   eq(table.concat((AutoTravel.Cons.PreferredStats()), ","), "strength", "gilt")
+   slash("buffs wert Willenskraft")
+   eq(B.Global().consStat, "spirit", "Willenskraft")
+   -- Umlaute, wie sie der Client schickt (UTF-8): der Wert muss sich vom vorigen unterscheiden
+   slash("buffs wert St\195\164rke")
+   eq(B.Global().consStat, "strength", "Umlaut: Staerke")
+   slash("buffs wert R\195\188stung")
+   eq(B.Global().consStat, "protection", "Umlaut: Ruestung")
+   slash("buffs wert agility")
+   eq(B.Global().consStat, "agility", "englischer Name")
+   slash("buffs wert Schutz")
+   eq(B.Global().consStat, "protection", "Schutz")
+   local text = say("buffs wert unsinn")
+   check(text:find("Unbekannter Wert", 1, true), "Unsinn wird gemeldet")
+   eq(B.Global().consStat, "protection", "und aendert nichts")
+   check(say("buffs wert auto"):find("automatisch", 1, true), "auto")
+   eq(B.Global().consStat, nil, "auto loescht die Einstellung")
+   check(say("buffs"):find("Gewaehlt wird: Intelligenz", 1, true), "/at buffs nennt die Wahl")
+end)
+
+test("Im Kampf: sechs Werte in den Taschen, ein Platz: ueber fuenf Kaempfe wird genau eine Schriftrolle verbraucht", function()
+   consBoot({ scroll = true }, "MAGE")
+   local server = serverModel()
+   local top = topScrolls()
+   local total = 0
+   for _, id in pairs(top) do W.Give(id, 20) total = total + 20 end
+   check(total == 120, "sechs Werte zu je 20 Stueck")
+   for _ = 1, 5 do
+      startFight()
+      W.Advance(40)
+      endFight()
+      W.Advance(30)
+   end
+   eq(#server.executed, 1, "genau eine Schriftrolle")
+   eq(famOf(server.executed[1].id), "intellect", "Intelligenz fuer den Magier")
+   eq(#server.refused, 0, "nichts abgewiesen")
+   local left = 0
+   for _, id in pairs(top) do left = left + W.CountOf(id) end
+   eq(left, total - 1, "119 uebrig")
+   eq(#W.world.auras, 1, "nie mehr als ein Buff auf dem Charakter")
+end)
+
+test("Im Kampf: der Buff laeuft aus: wieder genau eine, und zwar vom selben Wert", function()
+   consBoot({ scroll = true }, "WARRIOR")
+   local server = serverModel()
+   local top = topScrolls()
+   for _, id in pairs(top) do W.Give(id, 5) end
+   startFight()
+   W.Advance(30)
+   eq(#server.executed, 1, "erste")
+   eq(famOf(server.executed[1].id), "strength", "Staerke fuer den Krieger")
+   W.world.auras = {}                                  -- 30 Minuten spaeter
+   W.Advance(60)
+   eq(#server.executed, 2, "zweite")
+   eq(famOf(server.executed[2].id), "strength", "wieder Staerke")
+   eq(#server.refused, 0, "nichts abgewiesen")
+end)
+
+test("Im Kampf: eine fremde Schriftrolle, die schon wirkt, wird nicht ersetzt", function()
+   consBoot({ scroll = true }, "WARRIOR")
+   local server = serverModel()
+   local top = topScrolls()
+   for _, id in pairs(top) do W.Give(id, 5) end
+   W.AddAura("Willenskraft", spellOf(top.spirit), nil)   -- der Spieler hat selbst eine benutzt
+   startFight()
+   W.Advance(60)
+   eq(#server.executed, 0, "der Platz ist belegt: nichts wird benutzt")
+   eq(#useWhispers(), 0, "kein Befehl")
+end)
+
+test("Jaeger: im Kampf nichts (Automatisches Schiessen), in den 25 s danach alles", function()
+   consBoot(ALL(), "HUNTER")
+   local server = serverModel({ autorepeat = true })
+   W.Give(ID.mongoose, 1)
+   W.Give(ID.agility7, 1)
+   startFight()
+   W.Advance(60)
+   eq(#useWhispers(), 0, "im Kampf wird nichts gesendet")
+   eq(#server.refused, 0, "und nichts abgewiesen")
+   server.autorepeat = false                           -- der Kampf ist aus, das Schiessen auch
+   endFight()
+   eq(awaitUse(5), ID.mongoose, "nach dem Kampf geht der erste Befehl hinaus")
+   eq(awaitUse(10), ID.agility7, "danach die Schriftrolle")
+   W.Advance(10)
+   eq(#server.executed, 2, "beide benutzt")
+   eq(#server.refused, 0, "nichts abgewiesen")
+   -- das Fenster ist begrenzt: ein spaeter dazugekommener Gegenstand wartet auf den naechsten Kampf
+   W.Advance(30)                                       -- die 25 s sind um
+   W.Give(ID.mightyFort, 1)
+   W.Advance(60)
+   eq(#useWhispers(), 2, "ausserhalb des Fensters nichts")
+   startFight()
+   W.Advance(30)
+   eq(#useWhispers(), 2, "im naechsten Kampf wieder nichts")
+   endFight()
+   eq(awaitUse(5), ID.mightyFort, "nach dem naechsten Kampf")
+end)
+
+test("Jaeger: '/at buffs' erklaert, warum im Kampf nichts geschieht", function()
+   consBoot(ALL(), "HUNTER")
+   local n0 = #W.messages
+   SlashCmdList["AUTOTRAVEL"]("buffs")
+   check(table.concat(W.messages, "\n", n0 + 1):find("Automatische Schiessen", 1, true), "der Grund steht in der Anzeige")
+   -- 'jetzt' geht trotzdem: der Spieler entscheidet
+   W.Give(ID.mongoose, 1)
+   W.ClearSent()
+   SlashCmdList["AUTOTRAVEL"]("buffs jetzt")
+   W.Advance(2)
+   eq(#useWhispers(), 1, "'jetzt' sendet auch beim Jaeger")
+end)
+
+test("Im Kampf: solange sich der Charakter bewegt, wird nichts gesendet und kein Fehlschlag gezaehlt", function()
+   consBoot({ scroll = true })
+   local server = serverModel()
+   W.Give(ID.agility7, 2)
+   W.world.speed = 7
+   startFight()
+   W.Advance(60)
+   eq(#useWhispers(), 0, "in Bewegung nichts")
+   check(next(AutoTravel.Cons.state.item) == nil, "kein Fehlschlag gezaehlt")
+   check(next(AutoTravel.Cons.state.peace) == nil, "und nichts als 'geht im Kampf nicht' gemerkt")
+   W.world.speed = 0
+   eq(awaitUse(5), ID.agility7, "im Stand geht der Befehl hinaus")
+   W.Advance(10)
+   eq(#server.executed, 1, "benutzt")
+   eq(#server.refused, 0, "nichts abgewiesen")
+end)
+
+test("Im Kampf: ein Befehl, der ankommt, waehrend der Charakter laeuft, wird abgewiesen und spaeter erneut versucht", function()
+   consBoot({ scroll = true })
+   local server = serverModel({ delay = 1.0 })
+   W.Give(ID.agility7, 2)
+   startFight()
+   awaitUse(5)
+   W.world.speed = 7                                   -- der Charakter laeuft los, bevor der Befehl ankommt
+   W.Advance(3)
+   W.world.speed = 0
+   eq(#server.refused, 1, "abgewiesen: bewegt")
+   eq(server.refused[1].why, "bewegt", "Grund")
+   W.Advance(20)
+   eq(#server.executed, 1, "der naechste Versuch gelingt")
+   eq(AutoTravel.Cons.state.total, 1, "als gelungen gezaehlt")
+end)
+
+test("Abgewiesen: ein dauerhaft abgewiesener Gegenstand erzeugt nicht bei jedem Kampf Befehle und Meldungen", function()
+   consBoot({ scroll = true })
+   -- Der Server weist alle Schriftrollen ab (etwa ein staerkerer Buff derselben Art vom Bot selbst)
+   local server = serverModel({ refuse = function() return true end })
+   W.Give(ID.agility7, 5)
+   W.Give(ID.agility4, 5)
+   W.Give(ID.agility1, 5)
+   for _ = 1, 20 do                                    -- zwanzig Kaempfe in gut 30 Minuten
+      startFight()
+      W.Advance(40)
+      endFight()
+      W.Advance(60)
+   end
+   local n = #server.refused
+   -- je Gegenstand hoechstens 3 Versuche im Kampf, 3 danach (erste Sperre), dann je 3 nach jeder weiteren Sperre
+   -- (90 s, 5 min, 15 min): 15 in dieser Zeit. Vorher waren es bei jedem Kampf fuenf je Gegenstand.
+   check(n >= 3, "es wurde versucht: " .. n)
+   check(n <= 3 * 15, "ueber 33 Minuten auf wenige Befehle begrenzt: " .. n)
+   local warnings = messageCount("liess sich")
+   check(warnings <= 6, "hoechstens eine Meldung je Gegenstand und Art: " .. warnings)
+   eq(W.CountOf(ID.agility7), 5, "nichts verbraucht")
+   -- die Sperre waechst: die zweite ist laenger als die erste
+   check(AutoTravel.Cons.BLOCK_STEPS[2] > AutoTravel.Cons.BLOCK_STEPS[1], "wachsende Pausen")
+end)
+
+test("Abgewiesen: eine Sperre waechst mit jeder Wiederholung und endet mit dem ersten Erfolg", function()
+   consBoot({ elixir = true })
+   local refuse = true
+   local server = serverModel({ refuse = function() return refuse end })
+   W.Give(ID.mongoose, 3)
+   local C = AutoTravel.Cons
+   -- im Kampf: drei Fehlschlaege, dann nur noch nach dem Kampf
+   startFight()
+   W.Advance(40)
+   eq(#server.refused, C.MAX_TRIES, "im Kampf so viele Versuche")
+   endFight()
+   W.Advance(30)
+   eq(#server.refused, 2 * C.MAX_TRIES, "nach dem Kampf so viele weitere")
+   local it = C.state.item[ID.mongoose]
+   eq(it and it.blocks, 1, "erste Sperre")
+   check(it.blockedUntil - W.now > C.BLOCK_STEPS[1] - 40 and it.blockedUntil - W.now <= C.BLOCK_STEPS[1], "Dauer der ersten Sperre")
+
+   -- nach der Sperre noch einmal: die zweite ist laenger
+   W.Advance(C.BLOCK_STEPS[1] + 1)
+   startFight() W.Advance(5) endFight()
+   W.Advance(30)
+   it = C.state.item[ID.mongoose]
+   eq(it and it.blocks, 2, "zweite Sperre")
+   check(it.blockedUntil - W.now > C.BLOCK_STEPS[1], "die zweite Sperre ist laenger als die erste")
+
+   -- der Server nimmt ihn an: Erfolg setzt alles zurueck
+   refuse = false
+   W.Advance(C.BLOCK_STEPS[2] + 1)
+   startFight() W.Advance(5) endFight()
+   eq(awaitUse(10) ~= nil, true, "wieder versucht")
+   W.Advance(15)
+   eq(#server.executed, 1, "diesmal angenommen")
+   eq(C.state.item[ID.mongoose], nil, "Zaehler und Sperren sind zurueckgesetzt")
+end)
+
+test("Verzoegert: fuehrt der Server den Befehl erst nach einigen Sekunden aus, wird nicht doppelt benutzt", function()
+   consBoot({ scroll = true })
+   local server = serverModel({ delay = 5.5 })        -- der Charakter zauberte: der Befehl wartete auf das Ende
+   W.Give(ID.agility7, 3)
+   startFight()
+   W.Advance(40)
+   eq(#server.executed, 1, "ein Stueck verbraucht")
+   eq(W.CountOf(ID.agility7), 2, "zwei uebrig")
+   eq(#useWhispers(), 1, "ein Befehl")
+end)
+
+test("Im Kampf: ein Verbuendeter als Ziel haelt die Schriftrolle zurueck, das Elixier geht hinaus", function()
+   consBoot({ scroll = true, elixir = true })
+   local server = serverModel()
+   W.Give(ID.agility7, 1)
+   W.Give(ID.mongoose, 1)
+   W.world.target = { friend = true, self = false }
+   startFight()
+   eq(awaitUse(5), ID.mongoose, "das Elixier wirkt auf den Charakter selbst")
+   W.Advance(30)
+   eq(#useWhispers(), 1, "die Schriftrolle wartet")
+   W.world.target = { friend = true, self = true }    -- man selbst: das ist kein Hindernis
+   eq(awaitUse(10), ID.agility7, "man selbst ausgewaehlt: sie geht hinaus")
+   W.Advance(10)
+   eq(#server.executed, 2, "beide benutzt")
+   -- ein Feind als Ziel ist ebenfalls kein Hindernis
+   W.world.auras = {}
+   W.world.target = { friend = false, self = false }
+   W.Give(ID.agility7, 1)
+   eq(awaitUse(60), ID.agility7, "ein Feind als Ziel: kein Hindernis")
+end)
+
+test("Im Kampf: eine verbrauchte Schriftrolle, die an einen Verbuendeten ging, sperrt den Platz zehn Minuten", function()
+   consBoot({ scroll = true })
+   W.Give(ID.agility7, 3)
+   startFight()
+   eq(awaitUse(5), ID.agility7, "erste")
+   serverUses(ID.agility7, false)                      -- verbraucht, aber kein Buff auf dem Charakter
+   W.Advance(60)
+   eq(#useWhispers(), 1, "keine zweite innerhalb der Pause")
+   eq(messageCount("Buff ist nicht zu sehen"), 1, "eine Warnung")
+end)
+
+test("Ohne Zauberkennung des Clients: der Name genuegt, auch im ganzen Ablauf", function()
+   consBoot({ scroll = true, elixir = true })
+   local server = serverModel()
+   W.world.noSpellIds = true
+   W.Give(ID.agility7, 3)
+   W.Give(ID.mongoose, 3)
+   for _, id in ipairs({ ID.agility7, ID.mongoose }) do
+      W.world.spells[spellOf(id)] = { "Buff " .. spellOf(id), "Symbol" }
+   end
+   startFight()
+   W.Advance(60)
+   eq(#server.executed, 2, "je ein Stueck, keine Wiederholung")
+   eq(AutoTravel.Cons.state.total, 2, "beide als gelungen mit sichtbarem Buff")
+   check(AutoTravel.Cons.state.slot.scroll and AutoTravel.Cons.state.slot.scroll.verified == true, "der Name wurde als Buff erkannt")
+   eq(#server.refused, 0, "nichts abgewiesen")
+end)
+
+test("Im Kampf: ein Juju, das den Platz belegt, wird nicht durch ein Elixier ersetzt", function()
+   consBoot({ elixir = true })
+   local server = serverModel()
+   W.Give(ID.mongoose, 2)
+   W.AddAura("Juju Power", 16323)                     -- der Spieler hat es selbst benutzt
+   startFight()
+   W.Advance(40)
+   eq(#server.executed, 0, "der Kampfplatz ist belegt: kein Elixier ersetzt es")
+   eq(W.CountOf(ID.mongoose), 2, "nichts verbraucht")
+end)
+
+test("Editor: ein Haken bei den Verbrauchsguetern sendet das Profil nicht neu, eine Strategie schon", function()
+   ready()
+   local B = AutoTravel.Bot
+   W.ServerLine("SelfBot is now active.")
+   B.CustomSlot(1).combat.dps = true
+   AutoTravel.Set("Profile", "custom1")
+   AutoTravel.ProfileEditor.Select("custom", 1)
+   W.Advance(5)
+   W.ClearSent()
+   local fl = flagBox("cons", "flask")
+   fl:SetChecked(true) click(fl)
+   W.Advance(5)
+   eq(#whispers(), 0, "ein Verbrauchsgut geht den Bot nichts an: nichts gesendet")
+   eq(B.CustomSlot(1).cons.flask, true, "aber gespeichert")
+   local st = flagBox("combat", "aoe")
+   st:SetChecked(true) click(st)
+   W.Advance(5)
+   check(#whispers() > 0, "eine Strategie wird neu gesendet")
+end)
+
+test("/at buffs jetzt: sagt, warum nichts geschieht", function()
+   consBoot(ALL())
+   W.Give(ID.agility7, 1)
+   local slash = SlashCmdList["AUTOTRAVEL"]
+   local function say(cmd)
+      local n0 = #W.messages
+      slash(cmd)
+      return table.concat(W.messages, "\n", n0 + 1)
+   end
+   W.world.speed = 5
+   check(say("buffs jetzt"):find("bewegt sich", 1, true), "in Bewegung")
+   W.world.speed = 0
+   W.world.casting = true
+   check(say("buffs jetzt"):find("zaubert", 1, true), "beim Zaubern")
+   W.world.casting = false
+   W.world.mounted = true
+   check(say("buffs jetzt"):find("reitet", 1, true), "auf dem Reittier")
+   W.world.mounted = false
+   -- die Anzeige nennt das Hindernis ebenfalls
+   W.world.speed = 5
+   check(say("buffs"):find("Gerade geht nichts: der Charakter bewegt sich", 1, true), "Anzeige: Hindernis")
+   W.world.speed = 0
+   check(say("buffs jetzt"):find("Versuche:", 1, true), "ohne Hindernis: es wird versucht")
+end)
+
+test("Taschen und Anzeige: '/at buffs' zeigt Sperren und 'nur nach dem Kampf', auch mit Zeitstempel", function()
+   consBoot({ elixir = true })
+   W.Give(ID.mongoose, 1)
+   W.Give(ID.mightyAgility, 1)
+   AutoTravel.Cons.state.peace[ID.mongoose] = W.now
+   AutoTravel.Cons.state.item[ID.mightyAgility] = { tries = 0, blocks = 1, blockedUntil = W.now + 120 }
+   local n0 = #W.messages
+   SlashCmdList["AUTOTRAVEL"]("buffs")
+   local text = table.concat(W.messages, "\n", n0 + 1)
+   check(text:find("nur nach dem Kampf", 1, true), "'nur nach dem Kampf' steht da")
+   check(text:find("gesperrt noch", 1, true), "die Sperre steht da")
+   -- nach der Frist verschwindet die Markierung
+   W.Advance(AutoTravel.Cons.PEACE_DECAY + 1)
+   n0 = #W.messages
+   SlashCmdList["AUTOTRAVEL"]("buffs")
+   text = table.concat(W.messages, "\n", n0 + 1)
+   check(not text:find("nur nach dem Kampf", 1, true), "nach der Frist nicht mehr")
 end)
 
 print(string.format("\n%d Pruefungen, %d Fehler", passes, failures))

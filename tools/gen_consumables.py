@@ -6,7 +6,7 @@ Erzeugt AT_ConsumableData.lua aus der Welt-Datenbank von AzerothCore.
     tools/gen_consumables.py <pfad-zu-azerothcore> --check
                                                          bricht ab, wenn die Datei veraltet ist
 
-Gelesen werden zwei Tabellen aus data/sql/base/db_world des Checkouts:
+Gelesen werden drei Tabellen aus data/sql/base/db_world des Checkouts:
 
   item_template   Gegenstaende der Klasse "Verbrauchsgut": Flaeschchen (Unterklasse 3), Elixiere (2)
                   und Schriftrollen (4), je mit dem Zauber, den sie beim Benutzen wirken.
@@ -14,6 +14,14 @@ Gelesen werden zwei Tabellen aus data/sql/base/db_world des Checkouts:
                   SERVERS: je Gruppe wirkt nur ein Zauber, ein Flaeschchen steht in beiden. Wer
                   in keiner Gruppe steht (Wasseratmung, Unsichtbarkeit erkennen, Traumsicht ...),
                   ist kein Kampfbuff und wird nicht aufgenommen.
+                  Gruppe 1087 ("Scrolls", Regel 1 = exklusiv in spell_group_stack_rules) fasst die
+                  sechs Werte der Schriftrollen zusammen: eine neue Schriftrolle ENTFERNT die alte,
+                  auch die eines anderen Werts. Es gibt also nur einen Schriftrollenplatz.
+  spell_ranks     Die Stufen eines Zaubers: spell_group nennt nur den ersten Rang.
+
+Neben den Gegenstaenden gibt das Ergebnis die vollstaendigen Zaubermengen der Gruppen 1 und 2 aus
+(AT.ConsGroups): auch Juju, Zanza, R.O.I.D.S., Wasserwandeln u. a. belegen den Platz, obwohl sie
+kein Elixier sind. Wirkt einer davon, darf das Addon dort kein Elixier benutzen.
 
 Aufnahmeregeln
   Flaeschchen   Zauber in Gruppe 1 UND 2
@@ -47,6 +55,8 @@ SCROLL_FAMILIES = {
     "Spirit": "spirit",
     "Protection": "protection",
 }
+# spell_group 1087 "Scrolls": die sechs Werte, gegenseitig ausschliessend (Regel 1)
+SCROLL_GROUP = 1087
 ROMAN = {"I": 1, "II": 2, "III": 3, "IV": 4, "V": 5, "VI": 6, "VII": 7, "VIII": 8, "IX": 9, "X": 10}
 SCROLL_RE = re.compile(r"^Scroll of (%s)(?: (%s))?$" % ("|".join(SCROLL_FAMILIES), "|".join(ROMAN)))
 
@@ -138,6 +148,48 @@ def read_table(path, table):
     return cols, rows
 
 
+def group_members(by_group, gid, seen=None):
+    """Alle Zauber einer Gruppe; Eintraege mit negativer Kennung verweisen auf eine Untergruppe."""
+    seen = seen if seen is not None else set()
+    if gid in seen:
+        return set()
+    seen.add(gid)
+    out = set()
+    for sp in by_group.get(gid, []):
+        if sp < 0:
+            out |= group_members(by_group, -sp, seen)
+        else:
+            out.add(sp)
+    return out
+
+
+def with_ranks(spells, ranks):
+    """Zu jedem ersten Rang alle Raenge (spell_ranks: first_spell_id, spell_id, rank)."""
+    by_first = {}
+    for first, spell, _rank in ranks:
+        by_first.setdefault(first, set()).add(spell)
+    out = set()
+    for sp in spells:
+        out.add(sp)
+        out |= by_first.get(sp, set())
+    return out
+
+
+def collect_groups(world):
+    """Zaubermengen der Elixiergruppen und der Schriftrollengruppe, mit allen Raengen."""
+    world = Path(world)
+    _, groups = read_table(world / "spell_group.sql", "spell_group")
+    _, ranks = read_table(world / "spell_ranks.sql", "spell_ranks")
+    by_group = {}
+    for gid, sp in groups:
+        by_group.setdefault(gid, []).append(sp)
+    return {
+        "battle": with_ranks(group_members(by_group, 1), ranks),
+        "guardian": with_ranks(group_members(by_group, 2), ranks),
+        "scroll": with_ranks(group_members(by_group, SCROLL_GROUP), ranks),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Auswahl
 # ---------------------------------------------------------------------------
@@ -180,23 +232,55 @@ def collect(world_dir):
                 out[entry] = ("scroll", spell, req, ilvl, SCROLL_FAMILIES[m.group(1)],
                               ROMAN[m.group(2)] if m.group(2) else 1, name)
             elif name == "Runescroll of Fortitude":
+                # Steht NICHT in Gruppe 1087 (nur in 1084, "Single Stamina Buffs", Regel 4): wirkt
+                # neben einer Schriftrolle der sechs Werte, hat also einen eigenen Platz.
                 out[entry] = ("scroll", spell, req, ilvl, "fortitude", 1, name)
     return out
 
 
-def render(items):
+def check_scrolls(items, groups):
+    """Jede Schriftrolle der sechs Werte muss in der exklusiven Gruppe des Servers stehen, die
+    Runenschriftrolle darf es nicht. Stimmt das nicht mehr, hat der Server die Regel geaendert."""
+    problems = []
+    for entry, (kind, spell, _req, _ilvl, family, _rank, name) in sorted(items.items()):
+        if kind != "scroll":
+            continue
+        inside = spell in groups["scroll"]
+        if family == "fortitude" and inside:
+            problems.append("%d %s steht in der Schriftrollengruppe (eigener Platz angenommen)" % (entry, name))
+        if family != "fortitude" and not inside:
+            problems.append("%d %s steht nicht in der Schriftrollengruppe %d" % (entry, name, SCROLL_GROUP))
+    return problems
+
+
+def _wrap_ids(ids, indent="      ", width=100):
+    lines, cur = [], indent
+    for sp in sorted(ids):
+        piece = "%d, " % sp
+        if len(cur) + len(piece) > width:
+            lines.append(cur.rstrip())
+            cur = indent
+        cur += piece
+    if cur.strip():
+        lines.append(cur.rstrip())
+    return "\n".join(lines)
+
+
+def render(items, groups):
     lines = [
         "-- AT_ConsumableData.lua",
         "-- ---------------------------------------------------------------------------",
         "-- ERZEUGT von tools/gen_consumables.py aus der Welt-Datenbank von AzerothCore",
-        "-- (item_template, spell_group). Nicht von Hand aendern: neu erzeugen.",
+        "-- (item_template, spell_group, spell_ranks). Nicht von Hand aendern: neu erzeugen.",
         "--",
         "-- Eintrag je Gegenstand:  [Gegenstand] = { Art, Zauber, Stufe, Gegenstandsstufe [, Familie, Rang] }",
         "--",
         "--   Art      flask     Flaeschchen: belegt Kampf- UND Waechterplatz",
         "--            battle    Kampfelixier   (je Charakter wirkt nur eines)",
         "--            guardian  Waechterelixier (ebenso)",
-        "--            scroll    Schriftrolle: eine Familie (strength ...) mit Rang; hoechster Rang gilt",
+        "--            scroll    Schriftrolle: eine Familie (strength ...) mit Rang. Die sechs Werte teilen sich",
+        "--                      beim Server EINEN Platz (spell_group 1087, exklusiv); nur die",
+        "--                      Runenschriftrolle (fortitude) hat einen eigenen",
         "--   Zauber   der Zauber, den der Gegenstand wirkt und der als Buff auf dem Charakter liegt",
         "--",
         "-- Nur Buffs, die im Kampf nuetzen. Wasseratmung, Unsichtbarkeit erkennen und andere",
@@ -214,6 +298,20 @@ def render(items):
         lines.append("   [%d] = { \"%s\", %d, %d, %d%s },   -- %s" % (entry, kind, spell, req, ilvl, extra, name))
     lines.append("}")
     lines.append("")
+    lines += [
+        "-- Alle Zauber der beiden Elixiergruppen des Servers (spell_group 1 und 2), auch die, die kein",
+        "-- Elixier und kein Flaeschchen sind: Juju, Zanza, R.O.I.D.S., Wasserwandeln u. a. Wirkt einer",
+        "-- davon, ist der Platz belegt, und ein Elixier wuerde ihn ersetzen.",
+        "AT.ConsGroups = {",
+        "   battle = {",
+        _wrap_ids(groups["battle"]),
+        "   },",
+        "   guardian = {",
+        _wrap_ids(groups["guardian"]),
+        "   },",
+        "}",
+        "",
+    ]
     return "\n".join(lines)
 
 
@@ -229,7 +327,13 @@ def main(argv):
         return 2
 
     items = collect(world)
-    text = render(items)
+    groups = collect_groups(world)
+    problems = check_scrolls(items, groups)
+    if problems:
+        for line in problems:
+            print("Warnung: " + line, file=sys.stderr)
+        return 1
+    text = render(items, groups)
     # nur ASCII: die Namen der Datenbank sind englisch, aber ein Apostroph o. A. darf nie die Datei sprengen
     text = text.encode("ascii", "replace").decode("ascii")
 

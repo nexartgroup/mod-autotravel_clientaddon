@@ -112,7 +112,7 @@ end
 B.ConsFlags = {
    { "flask",  "Flaeschchen",   "Flaeschchen (Flask): belegen Kampf- und Waechterplatz und halten bis zu zwei Stunden." },
    { "elixir", "Elixiere",      "Kampf- und Waechterelixiere: je ein Elixier pro Platz, solange kein Flaeschchen wirkt." },
-   { "scroll", "Schriftrollen", "Schriftrollen der Werte (Staerke, Beweglichkeit, Intelligenz, Ausdauer, Willenskraft, Schutz): je Wert die hoechste Stufe." },
+   { "scroll", "Schriftrollen", "Schriftrollen: immer nur eine (der Server laesst die sechs Werte nicht nebeneinander zu). Der Wert richtet sich nach Klasse und Talentbaum; /at buffs wert stellt ihn fest ein." },
 }
 
 -- Ist die Art in dieser Tabelle gesetzt? Nur ein ausdrueckliches true zaehlt.

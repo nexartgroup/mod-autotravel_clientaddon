@@ -2,7 +2,7 @@
 ## Title: AutoTravel
 ## Notes: Carbonite liefert das Ziel, mod-autotravel berechnet den Weg. Uebernehmen per Knopf, Teleport-Knopf, Playerbot-Profile, Verbrauchsgueter im Kampf.
 ## Author: -
-## Version: 11.6
+## Version: 11.7
 ## SavedVariables: AutoTravelGlobalDB
 ## SavedVariablesPerCharacter: AutoTravelDB
 ## OptionalDeps: Carbonite

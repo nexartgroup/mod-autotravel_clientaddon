@@ -27,7 +27,7 @@ read_globals = {
    "UIDropDownMenu_SetSelectedValue", "UIDropDownMenu_SetWidth", "UIDropDownMenu_SetText",
    "ChatEdit_GetActiveWindow", "_G", "YES", "NO", "IsAddOnLoaded", "UnitOnTaxi", "UnitHasVehicleUI",
    -- Zeit, Einheiten, Eingabe
-   "GetTime", "UnitName", "UnitExists", "UnitIsDeadOrGhost", "UnitAffectingCombat", "UnitCastingInfo",
+   "GetTime", "UnitName", "UnitExists", "UnitIsFriend", "UnitIsUnit", "UnitIsDeadOrGhost", "UnitAffectingCombat", "UnitCastingInfo",
    "UnitChannelInfo", "GetUnitSpeed", "IsFalling", "IsMouselooking", "IsMouseButtonDown",
    "IsShiftKeyDown", "IsControlKeyDown", "IsAltKeyDown", "GetCursorPosition",
    "CursorHasItem", "CursorHasSpell", "GetMouseFocus", "MouseIsOver",

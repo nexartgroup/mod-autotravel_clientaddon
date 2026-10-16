@@ -38,6 +38,8 @@ M.world = {
    bags = {},                                     -- Taschen: bags[nr] = { size, [slot] = { id, count } }
    auras = {},                                    -- Buffs des Spielers: { name, spellId, expires }
    mounted = false,
+   target = nil,                                  -- ausgewaehltes Ziel: { friend = bool, self = bool }
+   noSpellIds = false,                            -- UnitBuff liefert keine Zauberkennung (aeltere Staende)
 }
 
 -- ---------------------------------------------------------------------------
@@ -169,6 +171,8 @@ function M.Advance(dt, step)
          local fn = f.__scripts.OnUpdate
          if fn and f.__shown ~= false then fn(f, d) end
       end
+      -- Haken fuer Tests, die einen Server nachbilden (laeuft nach jedem Zeitschritt)
+      if M.onStep then M.onStep(M.now) end
    end
 end
 
@@ -280,6 +284,7 @@ end
 
 function M.Install()
    M.now = 1000.0
+   M.onStep = nil
    M.sent, M.frames, M.messages, M.filters = {}, {}, {}, {}
    M.world = {
       dead = false, combat = false, speed = 0, falling = false, mouselook = false,
@@ -289,7 +294,7 @@ function M.Install()
       focus = nil,
       class = "WARRIOR", level = 80,
       forms = {}, spells = {}, talents = { 0, 0, 0 },
-      bags = {}, auras = {}, mounted = false,
+      bags = {}, auras = {}, mounted = false, target = nil, noSpellIds = false,
    }
 
    local W = M.world
@@ -340,6 +345,21 @@ function M.Install()
    _G.MouseIsOver = function(f) return f ~= nil and f.__over == true end
 
    -- Klasse, Stufe, Gestalten und Talente (Druidenerkennung des Bots)
+   -- Auswahl: kein Ziel, ein Verbuendeter oder man selbst (W.target = { friend = true, self = false })
+   _G.UnitExists = function(u)
+      if u == "target" then return W.target and 1 or nil end
+      return nil
+   end
+   _G.UnitIsFriend = function(_, u)
+      if u == "target" then return W.target ~= nil and W.target.friend == true end
+      return false
+   end
+   _G.UnitIsUnit = function(a, b)
+      if (a == "target" and b == "player") or (a == "player" and b == "target") then
+         return W.target ~= nil and W.target.self == true
+      end
+      return a == b
+   end
    _G.UnitClass = function() return W.class, W.class end
    _G.UnitLevel = function() return W.level end
    _G.GetNumShapeshiftForms = function() return #W.forms end
@@ -422,7 +442,7 @@ function M.Install()
       local a = W.auras[i]
       if not a then return nil end
       return a.name, "", "Interface\\Icons\\Spell", 1, nil, a.duration or 1800, a.expires or (M.now + 1800),
-             "player", false, false, a.spellId
+             "player", false, false, (not W.noSpellIds) and a.spellId or nil
    end
    _G.IsMounted = function() return W.mounted end
 

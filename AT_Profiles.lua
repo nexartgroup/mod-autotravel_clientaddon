@@ -119,13 +119,15 @@ local function RefreshSelectors()
    end
 end
 
-function P.MarkDirty()
+-- 'addonOnly': die Aenderung betrifft nur das Addon (Verbrauchsgueter), der Bot muss nichts erfahren:
+-- das Profil wird nicht neu gesendet (ein Dutzend Fluesternachrichten je Klick auf ein Kaestchen).
+function P.MarkDirty(addonOnly)
    local B = AT.Bot
    -- Wieder auf den Standard gebracht? Dann keine Ueberschreibung zurueckbehalten.
    if IsBuiltin() then B.NormalizeBuiltin(sel.id) end
 
    local cur = B.Current()
-   if cur.key == ProfileKey() and B.IsRunning() then
+   if not addonOnly and cur.key == ProfileKey() and B.IsRunning() then
       applyToken = applyToken + 1
       local token, applied = applyToken, B.applyCount
       AT.After(1.0, function()
@@ -216,7 +218,7 @@ local function FlagBox(parent, flag, tip, x, y, kind, builtinOnly, label)
             t[kind][flag] = nil
          end
       end
-      P.MarkDirty()
+      P.MarkDirty(kind == "cons")
    end)
 
    cb.flag = flag

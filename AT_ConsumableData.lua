@@ -1,14 +1,16 @@
 -- AT_ConsumableData.lua
 -- ---------------------------------------------------------------------------
 -- ERZEUGT von tools/gen_consumables.py aus der Welt-Datenbank von AzerothCore
--- (item_template, spell_group). Nicht von Hand aendern: neu erzeugen.
+-- (item_template, spell_group, spell_ranks). Nicht von Hand aendern: neu erzeugen.
 --
 -- Eintrag je Gegenstand:  [Gegenstand] = { Art, Zauber, Stufe, Gegenstandsstufe [, Familie, Rang] }
 --
 --   Art      flask     Flaeschchen: belegt Kampf- UND Waechterplatz
 --            battle    Kampfelixier   (je Charakter wirkt nur eines)
 --            guardian  Waechterelixier (ebenso)
---            scroll    Schriftrolle: eine Familie (strength ...) mit Rang; hoechster Rang gilt
+--            scroll    Schriftrolle: eine Familie (strength ...) mit Rang. Die sechs Werte teilen sich
+--                      beim Server EINEN Platz (spell_group 1087, exklusiv); nur die
+--                      Runenschriftrolle (fortitude) hat einen eigenen
 --   Zauber   der Zauber, den der Gegenstand wirkt und der als Buff auf dem Charakter liegt
 --
 -- Nur Buffs, die im Kampf nuetzen. Wasseratmung, Unsichtbarkeit erkennen und andere
@@ -173,4 +175,26 @@ AT.ConsData = {
    [46378] = { "flask", 54212, 75, 85 },   -- Flask of Pure Mojo
    [46379] = { "flask", 53758, 75, 85 },   -- Flask of Stoneblood
    [49632] = { "scroll", 69377, 80, 90, "fortitude", 1 },   -- Runescroll of Fortitude
+}
+
+-- Alle Zauber der beiden Elixiergruppen des Servers (spell_group 1 und 2), auch die, die kein
+-- Elixier und kein Flaeschchen sind: Juju, Zanza, R.O.I.D.S., Wasserwandeln u. a. Wirkt einer
+-- davon, ist der Platz belegt, und ein Elixier wuerde ihn ersetzen.
+AT.ConsGroups = {
+   battle = {
+      2367, 2374, 3160, 3164, 7844, 8212, 10667, 10669, 11328, 11334, 11390, 11405, 11406, 11474,
+      16322, 16323, 16329, 17038, 17537, 17538, 17539, 17626, 17627, 17628, 17629, 21920, 26276,
+      28490, 28491, 28493, 28497, 28501, 28503, 28518, 28519, 28520, 28521, 28540, 33053, 33720,
+      33721, 33726, 38954, 40567, 40568, 40572, 40573, 40575, 40576, 41608, 41609, 41610, 41611,
+      42735, 45373, 46837, 46839, 53746, 53748, 53749, 53752, 53755, 53758, 53760, 54212, 54452,
+      54494, 60340, 60341, 60344, 60345, 60346, 62380, 63729, 67016, 67017, 67018,
+   },
+   guardian = {
+      673, 2378, 2380, 3166, 3219, 3220, 3222, 3223, 3593, 10668, 10692, 10693, 11319, 11348,
+      11349, 11371, 11396, 15231, 15233, 16321, 16325, 16326, 16327, 17535, 17626, 17627, 17628,
+      17629, 24361, 24363, 24382, 24383, 24417, 27652, 27653, 28502, 28509, 28514, 28518, 28519,
+      28520, 28521, 28540, 29348, 39625, 39626, 39627, 39628, 40567, 40568, 40572, 40573, 40575,
+      40576, 41608, 41609, 41610, 41611, 42735, 46837, 46839, 53747, 53751, 53752, 53755, 53758,
+      53760, 53763, 53764, 54212, 60343, 60347, 62380, 67016, 67017, 67018,
+   },
 }

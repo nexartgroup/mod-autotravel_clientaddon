@@ -35,7 +35,7 @@ local AT = AutoTravel
 local CB = AT.Carb
 local N  = AT.Net
 
-AT.VERSION = "11.6"
+AT.VERSION = "11.7"
 local PREFIX = "|cff33ccffAutoTravel|r: "
 
 -- Anzeigenamen fuer Optionen -> Tastaturbelegung (siehe Bindings.xml).
@@ -677,7 +677,7 @@ local function Help()
       "/at profil reset <name|alle>  vorgegebene Profile auf den Standard",
       "/at bot               Playerbot-Steuerung an/aus",
       "/at erbstuecke        geschuetzte Erbstuecke anzeigen",
-      "/at buffs             Flaeschchen, Elixiere, Schriftrollen im Kampf (Zustand; jetzt | ignorieren | erlauben)",
+      "/at buffs             Flaeschchen, Elixiere, Schriftrollen im Kampf (Zustand; jetzt | wert | ignorieren | erlauben)",
       "/at botan | botaus    Selbstmodus von Hand schalten",
       "/at selfon <befehl>   Befehl zum Einschalten des Selbstmodus",
       "/at selfoff <befehl>  Befehl zum Ausschalten",
