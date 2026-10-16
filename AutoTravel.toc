@@ -1,8 +1,8 @@
 ## Interface: 30300
 ## Title: AutoTravel
-## Notes: Carbonite liefert das Ziel, mod-autotravel berechnet den Weg. Uebernehmen per Knopf, Teleport-Knopf, Playerbot-Profile.
+## Notes: Carbonite liefert das Ziel, mod-autotravel berechnet den Weg. Uebernehmen per Knopf, Teleport-Knopf, Playerbot-Profile, Verbrauchsgueter im Kampf.
 ## Author: -
-## Version: 11.5
+## Version: 11.6
 ## SavedVariables: AutoTravelGlobalDB
 ## SavedVariablesPerCharacter: AutoTravelDB
 ## OptionalDeps: Carbonite
@@ -12,6 +12,8 @@ AT_MapIds.lua
 AT_Net.lua
 AT_Bot.lua
 AT_Gear.lua
+AT_ConsumableData.lua
+AT_Consumables.lua
 AT_Handover.lua
 AT_Core.lua
 AT_UI.lua

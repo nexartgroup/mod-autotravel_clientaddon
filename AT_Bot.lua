@@ -8,10 +8,11 @@
 --
 -- Gesendet werden Strategiebefehle (co / nc / ll). Nie "ue", "roll", "s", "b",
 -- "talents", "destroy". Ausnahmen sind "e <Erbstueck>" aus AT_Gear.lua, das ein vom
--- Bot abgelegtes Erbstueck wieder anlegt, und "pet <Haltung>" (aggressive, defensive,
--- passive), das nur die Reaktion des Begleiters umstellt. Die Strategie "new rpg" wird
--- in den festen Profilen aktiv abgeschaltet, weil sie Questen ausloest und
--- darueber Ausruestung wechseln kann.
+-- Bot abgelegtes Erbstueck wieder anlegt, "pet <Haltung>" (aggressive, defensive,
+-- passive), das nur die Reaktion des Begleiters umstellt, und "u <Gegenstand>" aus
+-- AT_Consumables.lua (Flaeschchen, Elixiere, Schriftrollen im Kampf). Die Strategie
+-- "new rpg" wird in den festen Profilen aktiv abgeschaltet, weil sie Questen ausloest
+-- und darueber Ausruestung wechseln kann.
 --
 -- Befehle gehen als Fluesternachricht an den eigenen Namen -- so erwartet es
 -- mod-playerbots fuer Einzelbots.
@@ -102,6 +103,32 @@ function B.PetLabel(v)
       if s[1] == v then return s[2] end
    end
    return "unveraendert"
+end
+
+-- Verbrauchsgueter aus den Taschen (AT_Consumables.lua). Das ist KEINE Strategie des
+-- Servers, sondern eine Eigenschaft des Profils im Addon: der Bot kennt Schriftrollen,
+-- Elixiere und Flaeschchen nicht von sich aus, das Addon liest die Taschen und fluestert
+-- "u <Gegenstand>". Jede Art ist an oder aus; in den festen Profilen ist nichts gesetzt.
+B.ConsFlags = {
+   { "flask",  "Flaeschchen",   "Flaeschchen (Flask): belegen Kampf- und Waechterplatz und halten bis zu zwei Stunden." },
+   { "elixir", "Elixiere",      "Kampf- und Waechterelixiere: je ein Elixier pro Platz, solange kein Flaeschchen wirkt." },
+   { "scroll", "Schriftrollen", "Schriftrollen der Werte (Staerke, Beweglichkeit, Intelligenz, Ausdauer, Willenskraft, Schutz): je Wert die hoechste Stufe." },
+}
+
+-- Ist die Art in dieser Tabelle gesetzt? Nur ein ausdrueckliches true zaehlt.
+function B.ConsOn(map, flag)
+   return type(map) == "table" and map[flag] == true
+end
+
+-- Nur bekannte Arten, nur true: beschaedigte Eintraege (von Hand bearbeitete SavedVariables)
+-- fallen heraus.
+function B.CleanCons(map)
+   local out = {}
+   if type(map) ~= "table" then return out end
+   for _, f in ipairs(B.ConsFlags) do
+      if map[f[1]] == true then out[f[1]] = true end
+   end
+   return out
 end
 
 -- ---------------------------------------------------------------------------
@@ -263,6 +290,7 @@ function B.IsModified(key)
 
    if (tonumber(o.grace) or d.grace) ~= (d.grace or 2.0) then return true end
    if B.ValidPet(o.pet) ~= B.ValidPet(d.pet) then return true end
+   if not SameFlags(B.CleanCons(o.cons), B.CleanCons(d.cons)) then return true end
    return false
 end
 
@@ -280,6 +308,7 @@ function B.BuiltinOverride(key)
          extra     = table.concat(d.extra or {}, "; "),
          grace     = d.grace or 2.0,
          pet       = d.pet,
+         cons      = B.CleanCons(d.cons),
       }
       g.builtin[key] = o
    end
@@ -288,6 +317,7 @@ function B.BuiltinOverride(key)
    if type(o.extra) ~= "string" then o.extra = "" end
    if type(o.grace) ~= "number" then o.grace = d.grace or 2.0 end
    o.pet = B.ValidPet(o.pet)
+   o.cons = B.CleanCons(o.cons)
    return o
 end
 
@@ -334,6 +364,7 @@ local function ResolveBuiltin(p)
    q.extra     = SplitExtra(o.extra)
    q.grace     = tonumber(o.grace) or p.grace
    q.pet       = B.ValidPet(o.pet)
+   q.cons      = B.CleanCons(o.cons)
    q.modified  = true
    return q
 end
@@ -357,6 +388,7 @@ function B.CustomSlot(i)
    if type(c.extra) ~= "string" then c.extra = "" end
    if type(c.grace) ~= "number" then c.grace = 2.0 end
    c.pet = B.ValidPet(c.pet)
+   c.cons = B.CleanCons(c.cons)
    return c
 end
 
@@ -366,6 +398,7 @@ function B.CustomUsed(i)
    if next(c.combat) ~= nil then return true end
    if next(c.noncombat) ~= nil then return true end
    if c.pet ~= nil then return true end
+   if next(c.cons) ~= nil then return true end
    return c.extra ~= ""
 end
 
@@ -381,6 +414,7 @@ local function CustomProfile(i)
       loot = loot,
       grace = c.grace or (loot and 7.0 or 2.0),
       pet = c.pet,
+      cons = c.cons,
    }
 end
 
@@ -436,7 +470,9 @@ local function PruneRecent(now)
    recentCount = 0
 end
 
-function B.Whisper(text)
+-- onSent (optional) laeuft, wenn die Nachricht WIRKLICH hinausgeht -- die Warteschlange haelt
+-- sie unter Umstaenden zurueck. Wer ein Ergebnis abwarten will (AT_Consumables), misst ab dann.
+function B.Whisper(text, onSent)
    if not text or text == "" then return end
    local now = GetTime()
    recentCount = recentCount + 1
@@ -445,6 +481,7 @@ function B.Whisper(text)
    AT.Queue(function()
       SendChatMessage(text, "WHISPER", nil, UnitName("player"))
       AT.Debug("-> [Fluestern an sich] " .. text)
+      if onSent then onSent() end
    end, "bot")
 end
 

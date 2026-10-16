@@ -41,7 +41,9 @@ read_globals = {
    "SetMapToCurrentZone", "SetMapByID", "GetPlayerMapPosition",
    -- Inventar
    "GetInventoryItemQuality", "GetInventoryItemLink", "GetContainerNumSlots",
-   "GetContainerItemLink",
+   "GetContainerItemLink", "GetContainerItemInfo", "GetItemInfo",
+   -- Buffs und Reittier (AT_Consumables.lua)
+   "UnitBuff", "IsMounted",
    -- Carbonite
    "Nx",
 }
