@@ -33,7 +33,7 @@ local frame, content
 local sel = { kind = "custom", id = 1 }         -- kind: "builtin" (id = Schluessel) | "custom" (id = Platz)
 local boxes = { combat = {}, noncombat = {} }
 local nameEdit, extraEdit, graceEdit
-local titleFs, descFs, nameLbl, useBtn, clearBtn, resetBtn, hintFs
+local titleFs, descFs, nameLbl, useBtn, clearBtn, resetBtn, hintFs, petBtn
 local selButtons = {}
 local MAX_LABEL = 14
 
@@ -63,15 +63,15 @@ local function View()
       if B.HasOverride(sel.id) then
          local o = B.BuiltinOverride(sel.id)
          return { combat = o.combat, noncombat = o.noncombat, extra = o.extra, grace = o.grace,
-                  name = d.name, desc = d.desc }
+                  pet = o.pet, name = d.name, desc = d.desc }
       end
       return { combat = B.ParseFlags(d.combat), noncombat = B.ParseFlags(d.noncombat),
                extra = table.concat(d.extra or {}, "; "), grace = d.grace or 2.0,
-               name = d.name, desc = d.desc }
+               pet = B.ValidPet(d.pet), name = d.name, desc = d.desc }
    end
    local c = B.CustomSlot(sel.id)
    return { combat = c.combat or {}, noncombat = c.noncombat or {}, extra = c.extra or "",
-            grace = c.grace or 2.0, name = c.name or ("Eigenes " .. sel.id), desc = "" }
+            grace = c.grace or 2.0, pet = c.pet, name = c.name or ("Eigenes " .. sel.id), desc = "" }
 end
 
 -- Zum Schreiben: legt bei einem festen Profil die Ueberschreibung an.
@@ -192,7 +192,14 @@ local function FlagBox(parent, flag, tip, x, y, kind, builtinOnly)
          t[kind][flag] = nxt
          ShowFlag(cb, nxt)
       else
-         if cb:GetChecked() then t[kind][flag] = true else t[kind][flag] = nil end
+         if cb:GetChecked() then
+            t[kind][flag] = true
+         elseif AT.Bot.FlagDefaults[flag] then
+            -- Der Server schaltet sie von sich aus ein: abwaehlen heisst "ausdruecklich aus".
+            t[kind][flag] = false
+         else
+            t[kind][flag] = nil
+         end
       end
       P.MarkDirty()
    end)
@@ -263,6 +270,7 @@ local function LoadSelection()
 
    if extraEdit then extraEdit:SetText(v.extra or "") end
    if graceEdit then graceEdit:SetText(FormatGrace(v.grace)) end
+   if petBtn then petBtn.label:SetText("Haltung: " .. AT.Bot.PetLabel(v.pet)) end
 
    for _, kind in ipairs({ "combat", "noncombat" }) do
       for _, cb in ipairs(boxes[kind]) do
@@ -270,7 +278,12 @@ local function LoadSelection()
             cb:Hide()
          else
             cb:Show()
-            ShowFlag(cb, v[kind] and v[kind][cb.flag])
+            if builtin then
+               ShowFlag(cb, v[kind] and v[kind][cb.flag])
+            else
+               -- eigene Profile: was nicht gesetzt ist, gilt als Standard des Servers
+               ShowFlag(cb, AT.Bot.FlagState(v[kind], cb.flag))
+            end
          end
       end
    end
@@ -282,12 +295,14 @@ local function LoadSelection()
                         "'Auf Standard' stellt die Werte aus dem Addon wieder her; bis dahin behaelt das " ..
                         "Profil seine Werte, auch wenn eine neue Version den Standard aendert. " ..
                         "Wartezeit und Zusatzbefehle speichert die Eingabetaste. " ..
-                        "Achtung: 'new rpg' laesst den Bot questen und dabei Ausruestung wechseln.")
+                        "Achtung: 'new rpg' laesst den Bot questen und dabei Ausruestung wechseln; " ..
+                        "'maintenance' kann bei fast vollen Taschen Ueberfluessiges vernichten.")
       else
          hintFs:SetText("Enter speichert. Beim Anwenden wird jede Strategie ausdruecklich mit " ..
                         "+ oder - gesetzt, damit das Ergebnis nicht davon abhaengt, was 'co !' " ..
                         "als Standard hinterlaesst. Achtung: 'new rpg' laesst den Bot questen " ..
-                        "und dabei Ausruestung wechseln.")
+                        "und dabei Ausruestung wechseln; 'maintenance' kann bei fast vollen Taschen " ..
+                        "Ueberfluessiges vernichten.")
       end
    end
 
@@ -319,6 +334,9 @@ end
 
 -- Anzeige neu laden (nach einem Zuruecksetzen per Befehl).
 function P.Refresh() LoadSelection() end
+
+-- Der Knopf fuer die Haltung des Begleiters (fuer Tests und '/at ui').
+function P.PetButton() return petBtn end
 
 -- Die frueheren Aufrufer kannten nur die drei eigenen Plaetze.
 function P.LoadSlot(i) return P.Select("custom", i) end
@@ -518,6 +536,38 @@ local function Build()
    end
 
    local yr = yn - 28 - math.ceil(#ncList / 3) * 22 - 16
+
+   -- Begleiter (Pet): Haltung, die beim Anwenden des Profils gesetzt wird
+   local petLbl = c:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+   petLbl:SetPoint("TOPLEFT", 16, yr - 4)
+   petLbl:SetText("Begleiter (Pet)")
+
+   petBtn = AT.UI.Button(c, 170, 22, "Haltung: unveraendert", function()
+      local t = Target()
+      local cur = AT.Bot.ValidPet(t.pet)
+      local nxt
+      if cur == nil then
+         nxt = AT.Bot.PetStances[1][1]
+      else
+         for i, s in ipairs(AT.Bot.PetStances) do
+            if s[1] == cur then
+               nxt = AT.Bot.PetStances[i + 1] and AT.Bot.PetStances[i + 1][1] or nil
+            end
+         end
+      end
+      t.pet = nxt
+      LoadSelection()
+      P.MarkDirty()
+   end)
+   petBtn:SetPoint("TOPLEFT", 120, yr)
+   petBtn.tip = function()
+      GameTooltip:AddLine("Haltung des Begleiters")
+      GameTooltip:AddLine("Ein Klick wechselt: unveraendert - aggressiv - defensiv - passiv. Beim Anwenden " ..
+                          "des Profils geht 'pet <Haltung>' an den Bot, aber nur, wenn du einen Begleiter " ..
+                          "hast; rufst du ihn spaeter, wird die Haltung nachgezogen. 'unveraendert' sendet nichts.",
+                          0.7, 0.7, 0.7, true)
+   end
+   yr = yr - 36
 
    -- Freitext
    local exLbl = c:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")

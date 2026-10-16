@@ -2658,5 +2658,279 @@ test("Gestaltwechsel bei Nicht-Druiden: Ereignis bleibt folgenlos", function()
    eq(#whispers(), 0, "nichts gesendet")
 end)
 
+-- ---------------------------------------------------------------------------
+-- 11.5: Traenke, Wartung, Haltung des Begleiters
+-- ---------------------------------------------------------------------------
+
+local function setPet(present)
+   _G.UnitExists = function(u)
+      if u == "pet" then return present and 1 or nil end
+      return 1
+   end
+end
+
+local function petWhispers()
+   local n = 0
+   for _, t in ipairs(whispers()) do if t:find("^pet ") then n = n + 1 end end
+   return n
+end
+
+test("neue Strategien: potions (Kampf) und maintenance (Nichtkampf) stehen in den Listen der Profile", function()
+   boot()
+   local B = AutoTravel.Bot
+   local function has(list, name)
+      for _, f in ipairs(list) do if f[1] == name then return true end end
+      return false
+   end
+   check(has(B.CombatFlags, "potions"), "potions im Kampf")
+   check(has(B.NonCombatFlags, "maintenance"), "maintenance ausserhalb des Kampfes")
+   check(has(B.BuiltinNonCombatFlags, "maintenance"), "...auch bei den festen Profilen")
+   check(has(B.BuiltinNonCombatFlags, "gather"), "gather bleibt bei den festen Profilen")
+   check(not has(B.NonCombatFlags, "gather"), "gather bleibt aus der Liste der eigenen Profile heraus")
+end)
+
+test("feste Profile setzen weder potions noch maintenance (keine stille Aenderung)", function()
+   boot()
+   local B = AutoTravel.Bot
+   for _, d in ipairs(B.Builtin) do
+      check(not d.combat:find("potions", 1, true), d.key .. ": potions nicht gesetzt")
+      check(not d.noncombat:find("maintenance", 1, true), d.key .. ": maintenance nicht gesetzt")
+      check(B.ValidPet(d.pet) == nil, d.key .. ": keine Haltung gesetzt")
+   end
+end)
+
+test("eigenes Profil: ohne Eintrag gilt potions als an und maintenance als aus (Standard des Servers)", function()
+   ready()
+   local B = AutoTravel.Bot
+   W.ServerLine("SelfBot is now active.")
+   local c = B.CustomSlot(1)
+   c.combat.dps = true                       -- ein frueher gespeichertes Profil kennt potions nicht
+   AutoTravel.Set("Profile", "custom1")
+   W.ClearSent()
+   B.ApplyProfile()
+   W.Advance(10)
+   local co, nc
+   for _, t in ipairs(whispers()) do
+      if t:find("^co %+") or t:find("^co %-") then co = (co or "") .. t .. "|" end
+      if t:find("^nc %+") or t:find("^nc %-") then nc = (nc or "") .. t .. "|" end
+   end
+   check(co and co:find("+potions", 1, true), "co setzt +potions: " .. tostring(co))
+   check(nc and nc:find("-maintenance", 1, true), "nc setzt -maintenance: " .. tostring(nc))
+   check(not (co and co:find("-potions", 1, true)), "kein -potions")
+end)
+
+test("eigenes Profil: potions abwaehlen speichert ausdruecklich false und sendet -potions", function()
+   ready()
+   local B = AutoTravel.Bot
+   W.ServerLine("SelfBot is now active.")
+   AutoTravel.ProfileEditor.Select("custom", 1)
+   local pot = flagBox("combat", "potions")
+   check(pot ~= nil, "Kaestchen vorhanden")
+   check(pot.__shown ~= false, "bei eigenen Profilen sichtbar")
+   check(pot:GetChecked() == true or pot:GetChecked() == 1, "ohne Eintrag angehakt (Standard: an)")
+   pot:SetChecked(false)
+   click(pot)
+   eq(B.CustomSlot(1).combat.potions, false, "abgewaehlt = ausdruecklich aus")
+   check(B.CustomUsed(1), "das Profil zaehlt als benutzt")
+   AutoTravel.Set("Profile", "custom1")
+   W.ClearSent()
+   B.ApplyProfile()
+   W.Advance(10)
+   check(anyWhisperMatches("-potions"), "-potions geht an den Bot")
+   pot:SetChecked(true)
+   click(pot)
+   eq(B.CustomSlot(1).combat.potions, true, "wieder angehakt = an")
+
+   -- eine andere Flagge ohne Standard bleibt bei nil, wenn sie abgewaehlt wird
+   local boost = flagBox("combat", "boost")
+   boost:SetChecked(true) click(boost)
+   boost:SetChecked(false) click(boost)
+   eq(B.CustomSlot(1).combat.boost, nil, "boost: abgewaehlt = nicht gesetzt, wie bisher")
+end)
+
+test("feste Profile: potions und maintenance lassen sich setzen und gehen an den Bot", function()
+   ready()
+   local B = AutoTravel.Bot
+   W.ServerLine("SelfBot is now active.")
+   AutoTravel.Set("Profile", "normal")
+   AutoTravel.ProfileEditor.Select("builtin", "normal")
+   local pot = flagBox("combat", "potions")
+   local mnt = flagBox("noncombat", "maintenance")
+   check(pot ~= nil and mnt ~= nil, "beide Kaestchen vorhanden")
+   click(pot)                                -- nicht gesetzt -> an
+   click(pot)                                -- an -> aus
+   eq(B.BuiltinOverride("normal").combat.potions, false, "potions aus")
+   click(mnt)                                -- nicht gesetzt -> an
+   eq(B.BuiltinOverride("normal").noncombat.maintenance, true, "maintenance an")
+   W.ClearSent()
+   B.ApplyProfile()
+   W.Advance(10)
+   check(anyWhisperMatches("-potions"), "-potions im co-Befehl")
+   check(anyWhisperMatches("+maintenance"), "+maintenance im nc-Befehl")
+   -- Zuruecksetzen entfernt beides wieder
+   AutoTravel.ProfileEditor.ResetSelected()
+   check(not B.Find("normal").combat:find("potions", 1, true), "potions nicht mehr gesetzt")
+   check(not B.Find("normal").noncombat:find("maintenance", 1, true), "maintenance nicht mehr gesetzt")
+end)
+
+test("Haltung des Begleiters: nur gueltige Werte, alles andere gilt als nicht gesetzt", function()
+   boot()
+   local B = AutoTravel.Bot
+   eq(B.ValidPet("aggressive"), "aggressive", "aggressive")
+   eq(B.ValidPet("defensive"), "defensive", "defensive")
+   eq(B.ValidPet("passive"), "passive", "passive")
+   eq(B.ValidPet("passive; destroy all"), nil, "angehaengter Befehl")
+   eq(B.ValidPet("attack"), nil, "attack ist keine Haltung")
+   eq(B.ValidPet(""), nil, "leer")
+   eq(B.ValidPet(5), nil, "keine Zeichenkette")
+   eq(B.ValidPet(nil), nil, "nil")
+   eq(B.PetLabel("passive"), "passiv", "Anzeige")
+   eq(B.PetLabel(nil), "unveraendert", "Anzeige ohne Wert")
+end)
+
+test("Haltung des Begleiters: feste Profile senden sie nur mit Begleiter und nur, wenn gesetzt", function()
+   ready()
+   local B = AutoTravel.Bot
+   W.ServerLine("SelfBot is now active.")
+   AutoTravel.Set("Profile", "normal")
+
+   setPet(true)
+   W.ClearSent()
+   B.ApplyProfile()
+   W.Advance(10)
+   eq(petWhispers(), 0, "kein Standardwert: nichts gesendet")
+
+   B.BuiltinOverride("normal").pet = "passive"
+   check(B.IsModified("normal"), "die Haltung zaehlt als Aenderung")
+   eq(B.Find("normal").pet, "passive", "wirksam")
+   W.ClearSent()
+   B.ApplyProfile()
+   W.Advance(10)
+   check(hasWhisper("pet passive"), "pet passive geht an den Bot")
+   eq(petWhispers(), 1, "genau einmal")
+
+   setPet(false)
+   W.ClearSent()
+   B.ApplyProfile()
+   W.Advance(10)
+   eq(petWhispers(), 0, "ohne Begleiter nichts (der Bot wuerde mit einer Fehlermeldung antworten)")
+
+   B.ResetBuiltin("normal")
+   eq(B.Find("normal").pet, nil, "Zuruecksetzen entfernt die Haltung")
+   check(not B.IsModified("normal"), "wieder Standard")
+
+   -- Die Formwechsel-Neuanwendung (nur Kampfstrategien) beruehrt den Begleiter nicht.
+   B.BuiltinOverride("normal").pet = "defensive"
+   setPet(true)
+   W.ClearSent()
+   B.ApplyProfile(true)
+   W.Advance(10)
+   eq(petWhispers(), 0, "ApplyProfile(true) sendet keine Haltung")
+   setPet(nil)
+end)
+
+test("Haltung des Begleiters: eigene Profile, auch ohne Strategien", function()
+   ready()
+   local B = AutoTravel.Bot
+   W.ServerLine("SelfBot is now active.")
+   check(not B.CustomUsed(2), "Platz 2 ist leer")
+   B.CustomSlot(2).pet = "aggressive"
+   check(B.CustomUsed(2), "eine Haltung allein macht das Profil benutzt")
+   eq(B.Find("custom2").pet, "aggressive", "im Profilobjekt")
+
+   setPet(true)
+   AutoTravel.Set("Profile", "custom2")
+   W.ClearSent()
+   B.ApplyProfile()
+   W.Advance(10)
+   check(hasWhisper("pet aggressive"), "pet aggressive geht an den Bot")
+
+   -- von Hand verdorbene Datei: kein fremder Befehl wird daraus
+   B.CustomSlot(2).pet = "aggressive; roll"
+   eq(B.CustomSlot(2).pet, nil, "ungueltige Haltung wird verworfen")
+   B.BuiltinOverride("normal").pet = "passive; destroy all"
+   eq(B.BuiltinOverride("normal").pet, nil, "...auch bei einem festen Profil")
+   setPet(nil)
+end)
+
+test("Haltung des Begleiters: ruft der Spieler den Begleiter spaeter, wird sie nachgezogen", function()
+   ready()
+   local B = AutoTravel.Bot
+   W.ServerLine("SelfBot is now active.")
+   W.Advance(5)
+   B.BuiltinOverride("normal").pet = "passive"
+   AutoTravel.Set("Profile", "normal")
+
+   setPet(false)
+   B.ApplyProfile()
+   W.Advance(10)
+   W.ClearSent()
+
+   setPet(true)
+   W.Fire("UNIT_PET", "player")
+   W.Advance(0.5)
+   eq(petWhispers(), 0, "entprellt: noch nichts")
+   W.Advance(3)
+   eq(petWhispers(), 1, "danach genau einmal")
+   check(hasWhisper("pet passive"), "pet passive")
+
+   -- fremde Einheit: folgenlos
+   W.ClearSent()
+   W.Fire("UNIT_PET", "party1")
+   W.Advance(5)
+   eq(petWhispers(), 0, "UNIT_PET einer anderen Einheit")
+
+   -- Bot aus: nichts
+   W.ServerLine("SelfBot is now deactivated.")
+   W.ClearSent()
+   W.Fire("UNIT_PET", "player")
+   W.Advance(5)
+   eq(petWhispers(), 0, "Bot laeuft nicht: nichts gesendet")
+
+   -- Steuerung aus: nichts
+   W.ServerLine("SelfBot is now active.")
+   AutoTravel.Set("BotControl", 0)
+   W.ClearSent()
+   W.Fire("UNIT_PET", "player")
+   W.Advance(5)
+   eq(petWhispers(), 0, "ohne Playerbot-Steuerung nichts gesendet")
+   setPet(nil)
+end)
+
+test("Editor: der Knopf fuer die Haltung wechselt durch alle Zustaende und markiert das Profil als geaendert", function()
+   ready()
+   local B = AutoTravel.Bot
+   AutoTravel.ProfileEditor.Select("builtin", "verteidigen")
+   local btn = AutoTravel.ProfileEditor.PetButton()
+   check(btn ~= nil, "Knopf vorhanden")
+   eq(btn.label:GetText(), "Haltung: unveraendert", "zunaechst unveraendert")
+   check(not B.HasOverride("verteidigen"), "Anzeigen legt nichts an")
+
+   click(btn)
+   eq(B.BuiltinOverride("verteidigen").pet, "aggressive", "1. Klick")
+   eq(btn.label:GetText(), "Haltung: aggressiv", "Anzeige aggressiv")
+   check(B.IsModified("verteidigen"), "geaendert")
+   click(btn)
+   eq(B.BuiltinOverride("verteidigen").pet, "defensive", "2. Klick")
+   eq(btn.label:GetText(), "Haltung: defensiv", "Anzeige defensiv")
+   click(btn)
+   eq(B.BuiltinOverride("verteidigen").pet, "passive", "3. Klick")
+   eq(btn.label:GetText(), "Haltung: passiv", "Anzeige passiv")
+   click(btn)
+   -- Vorsicht: BuiltinOverride() legt eine Ueberschreibung an, wenn es keine gibt; erst pruefen, dann lesen.
+   check(not B.HasOverride("verteidigen"), "4. Klick: die Ueberschreibung wird wieder entfernt")
+   eq(B.Find("verteidigen").pet, nil, "4. Klick: wieder unveraendert")
+   check(not B.IsModified("verteidigen"), "zurueck beim Standard")
+
+   -- eigenes Profil
+   AutoTravel.ProfileEditor.Select("custom", 3)
+   btn = AutoTravel.ProfileEditor.PetButton()
+   eq(btn.label:GetText(), "Haltung: unveraendert", "eigenes Profil: zunaechst unveraendert")
+   click(btn)
+   eq(B.CustomSlot(3).pet, "aggressive", "eigenes Profil: gesetzt")
+   click(btn) click(btn) click(btn)
+   eq(B.CustomSlot(3).pet, nil, "eigenes Profil: nach vier Klicks wieder nicht gesetzt")
+end)
+
 print(string.format("\n%d Pruefungen, %d Fehler", passes, failures))
 os.exit(failures == 0 and 0 or 1)

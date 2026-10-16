@@ -129,7 +129,8 @@ Stadtkarte, 24 yd auf einer Zonenkarte).
 
 Optional steuert das Addon den Selbstmodus von mod-playerbots mit (Profile wie
 *Verteidigen*, *Aggressiv*, eigene Profile). Gesendet werden nur Strategiebefehle
-(`co`, `nc`, `ll`); `new rpg` wird in jedem festen Profil abgeschaltet, weil es
+(`co`, `nc`, `ll`) und, seit 11.5, die Haltung des Begleiters (`pet aggressive|defensive|passive`);
+`new rpg` wird in jedem festen Profil abgeschaltet, weil es
 Ausruestung wechseln kann. Der Erbstueckschutz legt ein vom Bot abgelegtes
 Erbstueck wieder an.
 
@@ -191,6 +192,34 @@ einmal neu an den Bot (nicht bei jedem Klick).
   keine Strategien. Aeltere BotPad-Staende (vor 1.2) schickten dem Bot weiter
   eigene Strategien und gaben jede Meldung doppelt aus.
 
+### Traenke, Wartung und Begleiter (ab 11.5)
+
+Die Profile steuern jetzt auch, was mod-playerbots dafuer anbietet. Geprueft wurde das am Quelltext
+von mod-playerbots, nicht geraten:
+
+| Wunsch | Was der Bot dafuer hat | Im Profil |
+|---|---|---|
+| Heiltraenke benutzen | Kampfstrategie `potions`: Gesundheitsstein oder Heiltrank bei kritischer Gesundheit, Manatrank bei wenig Mana. Der Server schaltet sie von sich aus **an** | Kampfflagge `potions` |
+| Rezepte lernen, verzaubern, Questgegenstaende benutzen | Nichtkampfstrategie `maintenance` (Standard: **aus**): bei Gelegenheit `use random recipe`, `enchant random item` und `disenchant random item` (Beruf noetig), `use random quest item`, Questlog aufraeumen, Quests teilen und `smart destroy item` | Nichtkampfflagge `maintenance` -- nur als Buendel, die Teile lassen sich nicht einzeln schalten |
+| Questobjekte einsammeln | steckt in `nc +loot`: der Bot nimmt Leichen **und Objekte** in der Naehe auf, auch Questobjekte, fuer die eine Quest laeuft; `ll normal` laesst Questgegenstaende zu | Nichtkampfflagge `loot` (schon vorhanden: Normal, Aggressiv, Plus) |
+| Haltung des Begleiters | Chatbefehl `pet aggressive`, `pet defensive`, `pet passive` (kein Strategiewert) | Knopf *Haltung* im Profil: unveraendert / aggressiv / defensiv / passiv |
+| Schriftrollen, Elixiere, Flaeschchen benutzen | **nichts**: der Bot benutzt sie nie von selbst. `buff` zeigt sie nur an, `s`/`b`/`give` verkaufen oder verschieben sie | nicht moeglich |
+
+* **`potions`** ist in den vorgegebenen Profilen nicht gesetzt (der Server-Standard bleibt: an). In
+  einem vorgegebenen Profil schaltet ein Klick durch *nicht gesetzt - an - aus*; `-potions` spart die
+  eigenen Traenke. In **eigenen Profilen** gilt fuer ein Profil, das vor 11.5 gespeichert wurde, der Standard
+  des Servers (an) -- nichts aendert sich still --; abwaehlen speichert ausdruecklich `-potions`.
+* **`maintenance`** ist aus, solange du es nicht einschaltest. Das Buendel kann bei fast vollen Taschen
+  (ab 90 %) Ueberfluessiges **vernichten** (`smart destroy item`) und zufaellig verzaubern oder entzaubern;
+  schalte es nur ein, wenn du das willst. Verzaubern und Entzaubern brauchen den Beruf.
+* **Begleiter.** Die Haltung geht beim Anwenden des Profils als `pet <Haltung>` an den Bot, aber nur, wenn du
+  einen Begleiter hast (sonst antwortet der Bot mit einer Fehlermeldung). Rufst du ihn spaeter (Jaeger,
+  Hexenmeister, Magier-Elementar, Schattengeist ...), zieht das Addon die Haltung eine Sekunde nach
+  dem Ereignis `UNIT_PET` nach. Der Wert wird nur aus den drei erlaubten Woertern gebildet; ein beschaedigter
+  Eintrag in der gespeicherten Datei wird verworfen und nie als Befehl gesendet. *unveraendert* sendet nichts.
+  Die vorgegebenen Profile setzen keine Haltung; stell sie nach Wunsch ein (Minimal und Aengstlich
+  etwa auf passiv).
+
 ## Verbindung und Protokoll
 
 Das Addon sendet Befehle als Chatzeilen (`.at ...`). Ohne das Servermodul
@@ -222,6 +251,14 @@ sodass er den Stop nicht auf der Leitung ueberholt. Gleichartige wartende Befehl
 Regler nur seinen letzten Wert meldet. Das Format der Nachrichten und die
 Versionsregeln stehen in der README von mod-autotravel (Abschnitt "Protokoll").
 Das Addon spricht Protokoll 4 und versteht auch Module mit Protokoll 3.
+
+## Aenderungen in 11.5
+
+* **Neue Profilwerte**: Kampfflagge `potions`, Nichtkampfflagge `maintenance` und die Haltung des
+  Begleiters (siehe "Traenke, Wartung und Begleiter"). Eigene Profile aus aelteren Versionen behalten ihr
+  Verhalten: `potions` gilt dort als an, `maintenance` als aus, die Haltung ist nicht gesetzt.
+* Tests: 88 neue Pruefungen; `UnitExists` steht in den erlaubten Namen von luacheck.
+* Das Protokoll aendert sich nicht.
 
 ## Aenderungen in 11.4
 
