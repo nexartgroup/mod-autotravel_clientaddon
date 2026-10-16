@@ -360,7 +360,9 @@ function M.Install()
       end
       return a == b
    end
-   _G.UnitClass = function() return W.class, W.class end
+   -- 3.3.5a: localizedClass, englishClass. Der erste Wert ist der Name in der Sprache des Clients: wer ihn statt
+   -- der Kennung (WARRIOR ...) liest, faellt auf.
+   _G.UnitClass = function() return "Klasse " .. tostring(W.class), W.class end
    _G.UnitLevel = function() return W.level end
    _G.GetNumShapeshiftForms = function() return #W.forms end
    _G.GetShapeshiftFormInfo = function(i)

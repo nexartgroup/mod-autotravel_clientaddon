@@ -3686,18 +3686,27 @@ end)
 -- 11.7: Befunde der dritten Pruefung (Schriftrollen sind EIN Platz, Jaeger, Bewegung, Sperren ...)
 -- ---------------------------------------------------------------------------
 
--- Ein Modell des Servers fuer "u <Link>": UseItemAction::UseItem und die Regeln der Zauber.
---   * Der Befehl wird nach 'delay' Sekunden ausgefuehrt; zaubert der Charakter dann, wartet er.
---   * Er scheitert still, wenn sich der Charakter bewegt (isMoving) oder ein Dauerzauber laeuft
---     ('autorepeat': Automatisches Schiessen) oder 'refuse(id)' ihn abweist (staerkerer Buff ...).
---   * Sonst wird ein Stueck verbraucht und der Buff gelegt. Ein neuer Buff VERDRAENGT jeden anderen
---     derselben exklusiven Gruppe: die sechs Schriftrollenwerte (spell_group 1087), Kampfelixiere
---     (Gruppe 1), Waechterelixiere (Gruppe 2; ein Flaeschchen steht in beiden).
+-- Ein Modell des Servers fuer "u <Link>": UseItemAction::UseItem, Spell::CheckCast und die Regeln der Zauber.
+--   * Ein Befehl wartet, solange der Charakter einen Zauber MIT Zauberzeit wirkt (PlayerbotAI::UpdateAI), und
+--     wird sonst nach 'delay' Sekunden ausgefuehrt.
+--   * Er scheitert still, wenn sich der Charakter bewegt (isMoving: auch FALLEN), wenn er einen Kanalzauber
+--     wirkt (sofort, kein Warten), wenn ein Dauerzauber laeuft ('autorepeat': Automatisches Schiessen) oder
+--     wenn 'refuse(id)' ihn abweist. Er scheitert auch an der Stufe und an der Abklingzeit: Elixiere und
+--     Flaeschchen teilen Kategorie 79 mit 3 s ab der AUSFUEHRUNG, Schriftrollen haben 1 s je Zauber.
+--   * Sonst wird ein Stueck verbraucht und der Buff gelegt. Ein neuer Buff VERDRAENGT jeden anderen derselben
+--     exklusiven Gruppe: die sechs Schriftrollenwerte (spell_group 1087), Kampfelixiere (Gruppe 1),
+--     Waechterelixiere (Gruppe 2; ein Flaeschchen steht in beiden).
+--   * Die Runenschriftrolle (49632) hat als Zauber nur ein Script (69377); der Kern wirkt daraus den Buff
+--     72590 (ab Stufe 70). Das steht hier FEST und folgt nicht den Daten des Addons.
+--   * Ausdauerbuffs (Gruppe 1084) sind Regel 4, "der staerkste gewinnt": mit 'rule4' gilt jeder andere wirkende
+--     Ausdauerbuff als staerker. Eine Schriftrolle mit eigenem Aufbau-Zauber wird dann vor dem Verbrauch
+--     abgewiesen (AURA_BOUNCED); die Runenschriftrolle ist verbraucht, und ihr Buff wird sofort verworfen.
 local function serverModel(o)
    o = o or {}
-   local S = { delay = o.delay or 0.4, autorepeat = o.autorepeat, refuse = o.refuse,
-               queue = {}, seen = #W.sent, executed = {}, refused = {} }
+   local S = { delay = o.delay or 0.4, autorepeat = o.autorepeat, refuse = o.refuse, rule4 = o.rule4,
+               queue = {}, seen = #W.sent, executed = {}, refused = {}, catUntil = 0, spellUntil = {} }
    local D, G = AutoTravel.ConsData, AutoTravel.ConsGroups
+   local SCRIPT = { [49632] = { aura = 72590, minLevel = 70 } }
 
    local function groupsOf(spell)
       local g = {}
@@ -3714,6 +3723,20 @@ local function serverModel(o)
       return g
    end
 
+   local function inStamina(spell)
+      for _, sp in ipairs(G.stamina) do if sp == spell then return true end end
+      return false
+   end
+
+   -- Wirkt ein anderer Ausdauerbuff (der unter rule4 als staerker gilt)?
+   local function strongerStamina(spell)
+      if not S.rule4 or not inStamina(spell) then return false end
+      for _, a in ipairs(W.world.auras) do
+         if a.spellId ~= spell and inStamina(a.spellId) then return true end
+      end
+      return false
+   end
+
    local function applyBuff(spell)
       local mine = groupsOf(spell)
       for i = #W.world.auras, 1, -1 do
@@ -3725,18 +3748,41 @@ local function serverModel(o)
       W.AddAura("Buff " .. spell, spell)
    end
 
+   local function onCooldown(id, now)
+      local d = D[id]
+      if SCRIPT[id] then return false end
+      if d[1] == "scroll" then return (S.spellUntil[d[2]] or 0) > now end
+      return S.catUntil > now
+   end
+
    function S.run(id, now)
+      local d = D[id]
       local why
-      if W.world.speed > 0 then why = "bewegt"
+      if W.world.speed > 0 or W.world.falling then why = "bewegt"
+      elseif W.world.channel then why = "kanalisiert"
       elseif S.autorepeat then why = "dauerzauber"
       elseif S.refuse and S.refuse(id) then why = "abgewiesen"
-      elseif W.CountOf(id) == 0 then why = "nichts da" end
+      elseif W.CountOf(id) == 0 then why = "nichts da"
+      elseif (d[3] or 0) > W.world.level then why = "stufe"
+      elseif onCooldown(id, now) then why = "abklingzeit"
+      elseif not SCRIPT[id] and strongerStamina(d[2]) then why = "bounce" end
       if why then
          S.refused[#S.refused + 1] = { id = id, why = why, at = now }
          return
       end
       W.TakeOne(id)
-      applyBuff(D[id][2])
+      if d[1] == "scroll" then
+         if not SCRIPT[id] then S.spellUntil[d[2]] = now + 1.0 end
+      else
+         S.catUntil = now + 3.0
+      end
+      local sc = SCRIPT[id]
+      if sc then
+         -- das Script wirkt den Buff; neben einem staerkeren wird er sofort verworfen
+         if W.world.level >= sc.minLevel and not strongerStamina(sc.aura) then applyBuff(sc.aura) end
+      else
+         applyBuff(d[2])
+      end
       S.executed[#S.executed + 1] = { id = id, at = now }
    end
 
@@ -3750,7 +3796,8 @@ local function serverModel(o)
       local i = 1
       while i <= #S.queue do
          local c = S.queue[i]
-         if now >= c.due and not (W.world.casting or W.world.channel) then
+         -- ein Zauber mit Zauberzeit haelt den Befehl zurueck; ein Kanalzauber nicht (er wird abgewiesen)
+         if now >= c.due and not W.world.casting then
             table.remove(S.queue, i)
             S.run(c.id, now)
          else
@@ -4302,6 +4349,438 @@ test("Taschen und Anzeige: '/at buffs' zeigt Sperren und 'nur nach dem Kampf', a
    SlashCmdList["AUTOTRAVEL"]("buffs")
    text = table.concat(W.messages, "\n", n0 + 1)
    check(not text:find("nur nach dem Kampf", 1, true), "nach der Frist nicht mehr")
+end)
+
+-- ---------------------------------------------------------------------------
+-- 11.7, zweite Runde: Befunde der vierten Pruefung
+-- ---------------------------------------------------------------------------
+
+test("Runenschriftrolle: die Tabelle fuehrt den Buff 72590, nicht das Script 69377 des Gegenstands", function()
+   boot()
+   local d = AutoTravel.ConsData[ID.runescroll]
+   eq(d[2], 72590, "der Buff auf dem Charakter")
+   local stamina = {}
+   for _, sp in ipairs(AutoTravel.ConsGroups.stamina) do stamina[sp] = true end
+   check(stamina[72590], "72590 steht in Gruppe 1084 (Ausdauerbuffs)")
+   check(stamina[48161] and stamina[48162] and stamina[8099], "Machtwort, Gebet der Seelenstaerke, Schriftrolle der Ausdauer")
+   check(not stamina[69377], "69377 ist nur das Script")
+end)
+
+test("Auswahl: die Runenschriftrolle wartet, solange irgendein Ausdauerbuff wirkt (der staerkste gewinnt)", function()
+   boot()
+   local list = { [ID.runescroll] = 1 }
+   local sc = { scroll = true }
+   local e, key = decide(list, {}, sc)
+   eq(e and e.id, ID.runescroll, "ohne Ausdauerbuff wird sie benutzt") eq(key, "fortitude", "Platz")
+   for _, sp in ipairs({ 48161, 48162, 8099 }) do          -- Machtwort, Gebet der Seelenstaerke, Schriftrolle der Ausdauer
+      local e2, _, why = decide(list, { sp }, sc)
+      eq(e2, nil, "Zauber " .. sp .. " wirkt: keine Runenschriftrolle")
+      check(table.concat(why, "\n"):find("Ausdauerbuff", 1, true), "der Grund wird genannt")
+   end
+   local _, _, why = decide(list, { 72590 }, sc)
+   eq((decide(list, { 72590 }, sc)), nil, "ihr eigener Buff wirkt: fertig")
+   check(table.concat(why, "\n"):find("Runenschriftrolle: wirkt", 1, true), "und als wirkend gemeldet")
+   e = decide(list, { 69377 }, sc)
+   eq(e and e.id, ID.runescroll, "69377 ist nur das Script und nie ein Buff")
+end)
+
+test("Im Kampf: die Runenschriftrolle wirkt ueber ein Script: der Buff 72590 wird erkannt, keine Wiederholung unter dem Buff", function()
+   consBoot({ scroll = true })
+   local server = serverModel()
+   W.Give(ID.runescroll, 6)
+   for _ = 1, 12 do                                     -- eine Stunde
+      startFight()
+      W.Advance(60)
+      endFight()
+      W.Advance(240)
+   end
+   eq(#server.executed, 1, "genau eine, solange der Buff wirkt")
+   eq(W.CountOf(ID.runescroll), 5, "fuenf uebrig")
+   local slot = AutoTravel.Cons.state.slot.fortitude
+   check(slot and slot.verified == true, "der Buff war zu sehen")
+   eq(messageCount("Buff ist nicht zu sehen"), 0, "keine Warnung")
+end)
+
+test("Im Kampf: neben Machtwort: Seelenstaerke bleibt die Runenschriftrolle liegen (der Kern verwuerfe ihren Buff)", function()
+   consBoot({ scroll = true })
+   local server = serverModel({ rule4 = true })
+   W.Give(ID.runescroll, 3)
+   W.AddAura("Machtwort: Seelenstaerke", 48161)
+   startFight()
+   W.Advance(120)
+   endFight()
+   eq(#server.executed, 0, "nichts verbraucht")
+   eq(W.CountOf(ID.runescroll), 3, "drei uebrig")
+   eq(#useWhispers(), 0, "kein Befehl")
+end)
+
+test("Im Kampf: Runenschriftrolle neben Schriftrolle der Beweglichkeit: beide wirken", function()
+   consBoot({ scroll = true }, "ROGUE")
+   local server = serverModel({ rule4 = true })
+   W.Give(ID.agility7, 1)
+   W.Give(ID.runescroll, 1)
+   startFight()
+   W.Advance(40)
+   eq(#server.executed, 2, "beide benutzt")
+   local seen = {}
+   for _, a in ipairs(W.world.auras) do seen[a.spellId] = true end
+   check(seen[spellOf(ID.agility7)] and seen[72590], "beide Buffs liegen auf dem Charakter")
+end)
+
+test("Im Kampf: Fallen und Kanalzauber halten den Befehl zurueck", function()
+   consBoot({ scroll = true })
+   W.Give(ID.agility7, 1)
+   startFight()
+   W.world.falling = true
+   W.Advance(20)
+   eq(#useWhispers(), 0, "waehrend des Fallens nichts")
+   W.world.falling = false
+   W.world.channel = true
+   W.Advance(20)
+   eq(#useWhispers(), 0, "waehrend eines Kanalzaubers nichts")
+   W.world.channel = false
+   eq(awaitUse(5), ID.agility7, "danach geht es los")
+end)
+
+test("Im Kampf: ein Kanalzauber, der beginnt, waehrend der Befehl unterwegs ist, zaehlt nicht als Fehlschlag", function()
+   consBoot({ scroll = true })
+   local server = serverModel({ delay = 1.0 })
+   W.Give(ID.agility7, 2)
+   startFight()
+   awaitUse(5)
+   W.world.channel = true                               -- der Charakter beginnt einen Kanalzauber: der Server weist ab
+   W.Advance(2.5)
+   W.world.channel = false
+   eq(#server.refused, 1, "abgewiesen")
+   eq(server.refused[1].why, "kanalisiert", "wegen des Kanalzaubers")
+   W.Advance(AutoTravel.Cons.VERIFY_UNTIL - 2.5 + 0.7)   -- die Geduld ist gerade abgelaufen, der neue Versuch noch nicht zu sehen
+   local it = AutoTravel.Cons.state.item[ID.agility7]
+   eq(it and it.tries, 0, "kein Fehlschlag gezaehlt")
+   eq(it and it.unclear, 1, "als unklar vermerkt")
+   check(next(AutoTravel.Cons.state.peace) == nil, "und nichts als 'im Kampf geht es nicht' gemerkt")
+   W.Advance(15)
+   eq(#server.executed, 1, "der naechste Versuch gelingt")
+   eq(AutoTravel.Cons.state.item[ID.agility7], nil, "Zaehler zurueckgesetzt")
+end)
+
+test("Im Kampf: immer wieder unklare Versuche zaehlen irgendwann doch als Fehlschlag", function()
+   consBoot({ scroll = true })
+   serverModel({ delay = 0.3, refuse = function() return true end })
+   W.Give(ID.agility7, 2)
+   startFight()
+   local C = AutoTravel.Cons
+   for _ = 1, C.MAX_UNCLEAR do
+      awaitUse(30)
+      W.world.speed = 5                                  -- gleich nach dem Senden bewegt sich der Charakter
+      W.Advance(C.VERIFY_UNTIL + 1)
+      W.world.speed = 0
+   end
+   local it = C.state.item[ID.agility7]
+   eq(it and it.tries, 1, "der fuenfte unklare Versuch zaehlte als Fehlschlag")
+   eq(it and it.unclear, 0, "die Reihe ist zurueckgesetzt")
+end)
+
+test("Im Kampf: ein Befehl, der hinter einem Zauber wartet, wird danach ausgefuehrt und nicht doppelt gesendet", function()
+   consBoot({ scroll = true })
+   local server = serverModel()
+   W.Give(ID.agility7, 3)
+   startFight()
+   awaitUse(5)
+   W.world.casting = true                               -- ein Zauber mit Zauberzeit: der Befehl wartet
+   W.Advance(5)
+   eq(#server.executed, 0, "noch nicht ausgefuehrt")
+   W.world.casting = false
+   W.Advance(20)
+   eq(#server.executed, 1, "danach ausgefuehrt")
+   eq(#useWhispers(), 1, "es blieb bei einem Befehl")
+   eq(AutoTravel.Cons.state.total, 1, "als gelungen gezaehlt")
+end)
+
+test("Abklingzeit: wird der erste Befehl verzoegert ausgefuehrt, wartet der naechste die Abklingzeit der Kategorie ab", function()
+   consBoot({ elixir = true })
+   local server = serverModel()
+   W.Give(ID.mongoose, 1)
+   W.Give(ID.mightyFort, 1)
+   startFight()
+   awaitUse(5)
+   W.world.casting = true                               -- der erste Befehl wartet auf das Ende des Zaubers
+   W.Advance(1.5)
+   W.world.casting = false
+   W.Advance(30)
+   eq(#server.executed, 2, "beide Elixiere benutzt")
+   eq(#server.refused, 0, "keines wegen der Abklingzeit abgewiesen")
+   local gap = server.executed[2].at - server.executed[1].at
+   check(gap >= 3.0, "mindestens die Abklingzeit der Kategorie dazwischen: " .. gap)
+end)
+
+test("Abklingzeit: Elixier und Flaeschchen teilen die Kategorie, eine Schriftrolle hat ihre eigene", function()
+   consBoot({ elixir = true, scroll = true })
+   local server = serverModel()
+   W.Give(ID.mongoose, 1)
+   W.Give(ID.agility7, 1)
+   startFight()
+   W.Advance(30)
+   eq(#server.executed, 2, "beides benutzt")
+   eq(#server.refused, 0, "nichts abgewiesen")
+end)
+
+test("/at buffs jetzt: nennt auch die Gruende der Auswahl und den Mindestabstand", function()
+   consBoot(ALL(), "ROGUE")
+   W.Give(ID.agility7, 1)
+   local slash = SlashCmdList["AUTOTRAVEL"]
+   local function say(cmd)
+      local n0 = #W.messages
+      slash(cmd)
+      return table.concat(W.messages, "\n", n0 + 1)
+   end
+   W.world.target = { friend = true, self = false }
+   check(say("buffs jetzt"):find("Verbuendeter", 1, true), "ein Verbuendeter ist ausgewaehlt")
+   W.world.target = nil
+   W.AddAura("Buff", spellOf(ID.agility7))
+   check(say("buffs jetzt"):find("eine wirkt bereits", 1, true), "der Platz ist belegt")
+   W.RemoveAura(spellOf(ID.agility7))
+   -- ein Befehl ist unterwegs
+   W.world.speed = 0
+   local text = say("buffs jetzt")
+   check(text:find("Versuche:", 1, true), "es wird versucht")
+   text = say("buffs jetzt")
+   check(text:find("unterwegs", 1, true), "ein Befehl ist noch unterwegs")
+   -- nach dem Erfolg: der Mindestabstand
+   W.Advance(3)
+   serverUses(ID.agility7)
+   W.Advance(2)
+   W.RemoveAura(spellOf(ID.agility7))
+   W.Give(ID.agility7, 1)
+   check(say("buffs jetzt"):find("Mindestabstand", 1, true), "der Mindestabstand wird genannt")
+end)
+
+-- Luecken, die eingebaute Fehler offen gelegt haben -----------------------------------------------
+
+test("Taschen: auch die fuenfte Tasche (Nummer 4) wird gelesen", function()
+   consBoot({ scroll = true })
+   W.world.bags[4] = { size = 12 }
+   W.world.bags[4][12] = { id = ID.agility7, count = 1 }
+   eq(AutoTravel.Cons.Scan()[ID.agility7] and AutoTravel.Cons.Scan()[ID.agility7].count, 1, "der Gegenstand in Tasche 4")
+   startFight()
+   eq(awaitUse(5), ID.agility7, "wird benutzt")
+end)
+
+test("Buffs: auch der vierzigste Buff wird gelesen, und ein Buff ohne Ablaufzeit zaehlt", function()
+   boot()
+   for i = 1, 39 do W.AddAura("Fremder Buff " .. i, 900000 + i) end
+   W.AddAura("Buff", 31337, 0)                          -- Ablaufzeit 0: kein Ablauf (Flaeschchen, Auren)
+   local a = AutoTravel.Cons.Auras()
+   check(a.ids[31337] ~= nil, "der vierzigste Buff mit Ablaufzeit 0 ist erkannt")
+   check(a.ids[900001] ~= nil and a.ids[900039] ~= nil, "und die davor")
+   eq(a.hasIds, true, "Kennungen vorhanden")
+   -- ein Flaeschchen ohne Ablaufzeit gilt als wirkend
+   W.world.auras = {}
+   W.AddAura("Flask of Endless Rage", spellOf(ID.flaskRage), 0)
+   eq(decide({ [ID.flaskRage] = 1 }, {}, { flask = true }, { }) ~= nil, true, "ohne Buff wird es benutzt")
+   check(AutoTravel.Cons.Auras().ids[spellOf(ID.flaskRage)], "der Buff mit Ablaufzeit 0 ist da")
+end)
+
+test("Ergebnis: ein Fehlschlag wird erkannt, auch wenn andere Buffs mit Kennung da sind", function()
+   consBoot({ scroll = true })
+   serverModel({ refuse = function() return true end })
+   W.AddAura("Fremder Buff", 900001)                    -- der Client liefert Kennungen
+   W.Give(ID.agility7, 1)
+   startFight()
+   local C = AutoTravel.Cons
+   for _ = 1, C.MAX_TRIES do awaitUse(C.VERIFY_UNTIL + 4) end
+   W.Advance(C.VERIFY_UNTIL + 1)
+   eq(W.CountOf(ID.agility7), 1, "nichts verbraucht")
+   eq(C.state.total, 0, "nichts als gelungen gezaehlt")
+   check(C.state.peace[ID.agility7] ~= nil, "als 'geht im Kampf nicht' gemerkt")
+end)
+
+test("Ergebnis: ein Buff ohne weniger Stueck genuegt (der Bestand wird verzoegert aktualisiert)", function()
+   consBoot({ scroll = true })
+   W.Give(ID.agility7, 2)
+   startFight()
+   eq(awaitUse(5), ID.agility7, "benutzt")
+   W.AddAura("Buff", spellOf(ID.agility7))              -- nur der Buff, die Zahl bleibt noch
+   W.Advance(3)
+   eq(AutoTravel.Cons.state.total, 1, "als gelungen gezaehlt")
+   eq(AutoTravel.Cons.state.item[ID.agility7], nil, "kein Fehlschlag")
+   eq(messageCount("Buff ist nicht zu sehen"), 0, "keine Warnung: der Buff war zu sehen")
+end)
+
+test("Ergebnis: eine gelungene Benutzung geht in die Obergrenze ein", function()
+   consBoot({ scroll = true })
+   W.Give(ID.agility7, 2)
+   startFight()
+   awaitUse(5)
+   serverUses(ID.agility7)
+   W.Advance(3)
+   eq(#AutoTravel.Cons.state.uses, 1, "eine Benutzung vermerkt")
+end)
+
+test("Flaeschchen: ein wirkendes Waechterelixier haelt das Flaeschchen ab, ebenso ein Kampfelixier", function()
+   boot()
+   local fl = { flask = true }
+   eq(decide({ [ID.flaskRage] = 1 }, { spellOf(ID.mightyFort) }, fl), nil, "Waechterelixier wirkt")
+   eq(decide({ [ID.flaskRage] = 1 }, { spellOf(ID.mongoose) }, fl), nil, "Kampfelixier wirkt")
+   check(decide({ [ID.flaskRage] = 1 }, {}, fl) ~= nil, "ohne beides: das Flaeschchen")
+end)
+
+test("Ergebnis: ohne Zauberkennung gilt der Name -- aber nur der richtige", function()
+   boot()
+   W.world.noSpellIds = true
+   W.world.spells[spellOf(ID.mongoose)] = { "Mongoose", "Symbol" }
+   W.AddAura("Mongoose", spellOf(ID.mongoose))
+   W.AddAura("Anderer Name", spellOf(ID.mightyFort))
+   local a = AutoTravel.Cons.Auras()
+   eq(a.hasIds, false, "der Client liefert keine Kennungen")
+   check(a.names["Mongoose"] and a.names["Anderer Name"], "die Namen sind da")
+   -- Das Elixier mit dem Namen wirkt; das mit dem unbekannten Namen nicht
+   local e = AutoTravel.Cons.Decide({ [ID.mongoose] = { id = ID.mongoose, link = "x", count = 1, d = AutoTravel.ConsData[ID.mongoose] } },
+                                    a, { level = 80, wanted = { elixir = true }, ignore = {}, state = newState(), now = 1000 })
+   eq(e, nil, "Kampfplatz belegt (Name stimmt)")
+   -- ein Buff mit einem Namen, der zu keinem Zauber der Gruppe gehoert, belegt den Platz nicht
+   e = AutoTravel.Cons.Decide({ [ID.mightyAgility] = { id = ID.mightyAgility, link = "x", count = 1, d = AutoTravel.ConsData[ID.mightyAgility] } },
+                              { ids = {}, names = { ["Etwas ganz anderes"] = true }, hasIds = false },
+                              { level = 80, wanted = { elixir = true }, ignore = {}, state = newState(), now = 1000 })
+   check(e ~= nil, "ein fremder Name belegt den Platz nicht")
+end)
+
+test("Ereignisse: Tod, Ladebildschirm und ausgeschalteter Selbstmodus verwerfen den unterwegs befindlichen Befehl", function()
+   local B = consBoot({ scroll = true })
+   local C = AutoTravel.Cons
+   W.Give(ID.agility7, 3)
+   startFight()
+   awaitUse(5)
+   check(C.state.pending ~= nil, "ein Befehl ist unterwegs")
+   -- Tod
+   W.world.dead = true
+   W.Fire("PLAYER_DEAD")
+   eq(C.state.pending, nil, "Tod: verworfen")
+   eq(C.state.item[ID.agility7], nil, "und nicht als Fehlschlag gezaehlt")
+   W.world.dead = false
+   W.Advance(10)
+
+   -- Ladebildschirm
+   C.state.pending = { id = ID.agility7, key = "scroll", link = W.ItemLink(ID.agility7), queuedAt = W.now, sentAt = W.now, countBefore = 3, mode = "combat" }
+   C.state.nextAt = W.now + 50
+   W.Fire("PLAYER_ENTERING_WORLD")
+   eq(C.state.pending, nil, "Ladebildschirm: verworfen")
+   eq(C.state.nextAt, 0, "und der Abstand aufgehoben")
+
+   -- Selbstmodus aus
+   C.state.pending = { id = ID.agility7, key = "scroll", link = W.ItemLink(ID.agility7), queuedAt = W.now, sentAt = W.now, countBefore = 3, mode = "combat" }
+   W.ServerLine("SelfBot is now deactivated.")
+   W.Advance(2)
+   eq(C.state.pending, nil, "Selbstmodus aus: verworfen")
+   eq(B.IsRunning(), false, "Selbstmodus ist aus")
+end)
+
+test("Jaeger: '/at buffs jetzt' geht auch im Kampf", function()
+   consBoot(ALL(), "HUNTER")
+   W.Give(ID.mongoose, 1)
+   startFight()
+   W.Advance(20)
+   eq(#useWhispers(), 0, "von selbst im Kampf nichts")
+   SlashCmdList["AUTOTRAVEL"]("buffs jetzt")
+   W.Advance(2)
+   eq(#useWhispers(), 1, "auf Befehl auch im Kampf")
+end)
+
+test("Sperren: die Zahlen, wie sie in der README stehen (3 Versuche, 90 s, 5 min, 15 min, 1 h; 7 s Geduld; 30 min)", function()
+   boot()
+   local C = AutoTravel.Cons
+   eq(C.MAX_TRIES, 3, "drei Versuche")
+   eq(table.concat(C.BLOCK_STEPS, ","), "90,300,900,3600", "Sperren")
+   eq(C.VERIFY_UNTIL, 7, "Geduld")
+   eq(C.PEACE_DECAY, 1800, "eine halbe Stunde")
+   eq(C.MAX_UNCLEAR, 5, "fuenf unklare Versuche")
+end)
+
+test("Meldungen: die Warnung 'Buff nicht zu sehen' kommt je Gegenstand einmal, auch bei Wiederholung", function()
+   consBoot({ scroll = true })
+   W.Give(ID.agility7, 4)
+   startFight()
+   eq(awaitUse(5), ID.agility7, "erste")
+   serverUses(ID.agility7, false)
+   W.Advance(10)
+   eq(messageCount("Buff ist nicht zu sehen"), 1, "eine Warnung")
+   eq(awaitUse(700), ID.agility7, "zehn Minuten spaeter die zweite")
+   serverUses(ID.agility7, false)
+   W.Advance(10)
+   eq(messageCount("Buff ist nicht zu sehen"), 1, "weiterhin nur eine")
+end)
+
+test("/at buffs: 'stat' ist ein Alias von 'wert', 'zuruecksetzen' loescht Sperren, beschaedigte Einstellung wird ignoriert", function()
+   local B = consBoot({ scroll = true }, "MAGE")
+   local slash = SlashCmdList["AUTOTRAVEL"]
+   slash("buffs stat schutz")
+   eq(B.Global().consStat, "protection", "stat wie wert")
+   B.Global().consStat = "gibtsnicht"
+   eq(table.concat((AutoTravel.Cons.PreferredStats()), ","), "intellect,stamina,spirit", "ein unbekannter Wert wird ignoriert")
+   B.Global().consStat = nil
+   local C = AutoTravel.Cons
+   C.state.item[ID.agility7] = { tries = 2, blocks = 1, blockedUntil = W.now + 500 }
+   C.state.peace[ID.agility7] = W.now
+   C.state.slot.scroll = { lastUse = W.now, verified = true }
+   C.state.warned.x = true
+   C.state.uses[1] = W.now
+   slash("buffs zuruecksetzen")
+   eq(next(C.state.item), nil, "Sperren weg")
+   eq(next(C.state.peace), nil, "gemerkte Gegenstaende weg")
+   eq(next(C.state.slot), nil, "Mindestabstaende weg")
+   eq(next(C.state.warned), nil, "Meldungen duerfen wieder kommen")
+   eq(#C.state.uses, 0, "Benutzungen weg")
+end)
+
+test("Runenschriftrolle: verbraucht, aber Buff nicht zu sehen: zehn Minuten Pause und eine Warnung", function()
+   consBoot({ scroll = true })
+   W.Give(ID.runescroll, 4)
+   startFight()
+   eq(awaitUse(5), ID.runescroll, "erste")
+   serverUses(ID.runescroll, false)                      -- verbraucht, kein Buff zu sehen
+   W.Advance(10)
+   eq(messageCount("Buff ist nicht zu sehen"), 1, "eine Warnung")
+   W.Advance(300)
+   eq(#useWhispers(), 1, "fuenf Minuten spaeter noch nichts")
+   eq(awaitUse(400), ID.runescroll, "nach zehn Minuten wieder")
+end)
+
+test("Im Kampf: ein klarer Fehlschlag unterbricht die Reihe unklarer Versuche", function()
+   consBoot({ scroll = true })
+   W.Give(ID.agility7, 2)
+   local C = AutoTravel.Cons
+   -- ein Versuch, dessen Geduld gerade abgelaufen ist (nicht im Kampf: es wird nichts Neues gesendet)
+   local function attempt(disturbed)
+      C.state.pending = { id = ID.agility7, key = "scroll", link = W.ItemLink(ID.agility7), queuedAt = W.now - 9,
+                          sentAt = W.now - 8, countBefore = 2, mode = "combat", disturbed = disturbed }
+      C.Tick(W.now, false)
+   end
+   for _ = 1, C.MAX_UNCLEAR - 1 do attempt(true) end    -- vier unklare
+   local it = C.state.item[ID.agility7]
+   eq(it and it.unclear, C.MAX_UNCLEAR - 1, "vier unklare") eq(it and it.tries, 0, "kein Fehlschlag")
+   attempt(false)                                        -- ein klarer Fehlschlag
+   it = C.state.item[ID.agility7]
+   eq(it and it.tries, 1, "der klare Fehlschlag zaehlt") eq(it and it.unclear, 0, "und beendet die Reihe")
+   for _ = 1, C.MAX_UNCLEAR - 1 do attempt(true) end    -- wieder vier unklare
+   it = C.state.item[ID.agility7]
+   eq(it and it.tries, 1, "sie zaehlen nicht mit den ersten vieren zusammen")
+   eq(it and it.unclear, C.MAX_UNCLEAR - 1, "vier unklare in der neuen Reihe")
+   attempt(true)                                         -- der fuenfte in dieser Reihe
+   it = C.state.item[ID.agility7]
+   eq(it and it.tries, 2, "der fuenfte unklare zaehlt doch")
+end)
+
+test("Ergebnis: ein gleichnamiger Buff mit anderer Kennung zaehlt nicht als Erfolg", function()
+   consBoot({ scroll = true })
+   serverModel({ refuse = function() return true end })
+   W.world.spells[spellOf(ID.agility7)] = { "Beweglichkeit", "Symbol" }
+   W.AddAura("Beweglichkeit", 900001)                    -- etwa vom Elixier: gleicher Name, andere Kennung
+   W.Give(ID.agility7, 1)
+   startFight()
+   local C = AutoTravel.Cons
+   for _ = 1, C.MAX_TRIES do awaitUse(C.VERIFY_UNTIL + 4) end
+   W.Advance(C.VERIFY_UNTIL + 1)
+   eq(C.state.total, 0, "nichts als gelungen gezaehlt")
+   check(C.state.peace[ID.agility7] ~= nil, "der Fehlschlag wurde erkannt")
 end)
 
 print(string.format("\n%d Pruefungen, %d Fehler", passes, failures))

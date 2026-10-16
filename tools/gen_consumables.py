@@ -18,10 +18,18 @@ Gelesen werden drei Tabellen aus data/sql/base/db_world des Checkouts:
                   sechs Werte der Schriftrollen zusammen: eine neue Schriftrolle ENTFERNT die alte,
                   auch die eines anderen Werts. Es gibt also nur einen Schriftrollenplatz.
   spell_ranks     Die Stufen eines Zaubers: spell_group nennt nur den ersten Rang.
+  spell_script_names  Zauber, die ein Script des Kerns ausfuehrt. Der Zauber eines Gegenstands kann nur
+                  ein solches Script sein, das den eigentlichen Buff erst wirkt: die Runenschriftrolle
+                  der Seelenstaerke benutzt Zauber 69377 (SCRIPT_EFFECT), der Buff auf dem Charakter ist
+                  Zauber 72590 (spell_item_runescroll_of_fortitude). Solche Gegenstaende stehen in
+                  AURA_OVERRIDE; ein anderer Gegenstand mit Script-Zauber bricht die Erzeugung ab.
 
 Neben den Gegenstaenden gibt das Ergebnis die vollstaendigen Zaubermengen der Gruppen 1 und 2 aus
 (AT.ConsGroups): auch Juju, Zanza, R.O.I.D.S., Wasserwandeln u. a. belegen den Platz, obwohl sie
-kein Elixier sind. Wirkt einer davon, darf das Addon dort kein Elixier benutzen.
+kein Elixier sind. Wirkt einer davon, darf das Addon dort kein Elixier benutzen. Dazu kommt Gruppe
+1084 ("Single Stamina Buffs", Regel 4: nur der staerkste wirkt): Machtwort: Seelenstaerke, Gebet der
+Seelenstaerke, Schriftrollen der Ausdauer und die Runenschriftrolle. Eine Runenschriftrolle, die
+neben einem staerkeren dieser Buffs benutzt wird, ist verbraucht und der Buff sofort wieder weg.
 
 Aufnahmeregeln
   Flaeschchen   Zauber in Gruppe 1 UND 2
@@ -57,6 +65,26 @@ SCROLL_FAMILIES = {
 }
 # spell_group 1087 "Scrolls": die sechs Werte, gegenseitig ausschliessend (Regel 1)
 SCROLL_GROUP = 1087
+# spell_group 1084 "Single Stamina Buffs" (Regel 4, der staerkste gewinnt)
+STAMINA_GROUP = 1084
+
+# Gegenstaende, deren Zauber nur ein Script ist: der Buff auf dem Charakter ist ein anderer Zauber.
+AURA_OVERRIDE = {
+    49632: 72590,   # Runescroll of Fortitude: 69377 ist SCRIPT_EFFECT, das Script wirkt 72590 (Stufe >= 70)
+}
+
+# Flaeschchen, die absichtlich fehlen. Jedes andere Flaeschchen, dessen Zauber nicht in beiden Gruppen
+# steht, bricht die Erzeugung ab: es wuerde sonst unbemerkt fehlen.
+KNOWN_SKIPPED_FLASKS = {
+    47499: "Flask of the North: Zauber 67019 ist ein Script, das je nach Werten 67016, 67017 oder 67018 wirkt",
+    # Die Mixtures der Alchemisten (Unterklasse "Flaeschchen", Stufe 0): ihre Zauber 65252 bis 65255 stehen in
+    # keiner Elixiergruppe, der Server behandelt sie also weder als Flaeschchen noch als Elixier; was sie
+    # wirken, steht nicht in der Datenbank.
+    40082: "Mixture of the Frost Wyrm (Zauber 65253, in keiner Elixiergruppe)",
+    40083: "Mixture of Stoneblood (Zauber 65255, in keiner Elixiergruppe)",
+    40084: "Mixture of Endless Rage (Zauber 65252, in keiner Elixiergruppe)",
+    40404: "Mixture of Pure Mojo (Zauber 65254, in keiner Elixiergruppe)",
+}
 ROMAN = {"I": 1, "II": 2, "III": 3, "IV": 4, "V": 5, "VI": 6, "VII": 7, "VIII": 8, "IX": 9, "X": 10}
 SCROLL_RE = re.compile(r"^Scroll of (%s)(?: (%s))?$" % ("|".join(SCROLL_FAMILIES), "|".join(ROMAN)))
 
@@ -187,6 +215,7 @@ def collect_groups(world):
         "battle": with_ranks(group_members(by_group, 1), ranks),
         "guardian": with_ranks(group_members(by_group, 2), ranks),
         "scroll": with_ranks(group_members(by_group, SCROLL_GROUP), ranks),
+        "stamina": with_ranks(group_members(by_group, STAMINA_GROUP), ranks),
     }
 
 
@@ -195,15 +224,19 @@ def collect_groups(world):
 # ---------------------------------------------------------------------------
 
 def collect(world_dir):
+    """Rueckgabe: (Gegenstaende, Probleme). Probleme sind Dinge, die das Ergebnis unbrauchbar machen."""
     world = Path(world_dir)
     _, groups = read_table(world / "spell_group.sql", "spell_group")
     battle = {s for g, s in groups if g == 1}
     guardian = {s for g, s in groups if g == 2}
+    _, scripts = read_table(world / "spell_script_names.sql", "spell_script_names")
+    script_spells = {sp for sp, _name in scripts}
 
     cols, rows = read_table(world / "item_template.sql", "item_template")
     ix = {c: i for i, c in enumerate(cols)}
 
     out = {}
+    problems = []
     for r in rows:
         if r[ix["class"]] != 0:
             continue
@@ -218,9 +251,17 @@ def collect(world_dir):
         if not spell or entry in EXCLUDED_ITEMS:
             continue
 
+        # Der Zauber des Gegenstands ist nur ein Script: der Buff ist ein anderer Zauber.
+        use_spell = spell
+        if entry in AURA_OVERRIDE:
+            spell = AURA_OVERRIDE[entry]
+
         if sub == 3:                                   # Flaeschchen
             if spell in battle and spell in guardian:
                 out[entry] = ("flask", spell, req, ilvl, None, None, name)
+            elif entry not in KNOWN_SKIPPED_FLASKS:
+                problems.append("Flaeschchen %d %s (Zauber %d) steht nicht in beiden Elixiergruppen und ist nicht als "
+                                "ausgelassen vermerkt" % (entry, name, spell))
         elif sub == 2:                                 # Elixier
             if spell in battle and spell not in guardian:
                 out[entry] = ("battle", spell, req, ilvl, None, None, name)
@@ -233,9 +274,14 @@ def collect(world_dir):
                               ROMAN[m.group(2)] if m.group(2) else 1, name)
             elif name == "Runescroll of Fortitude":
                 # Steht NICHT in Gruppe 1087 (nur in 1084, "Single Stamina Buffs", Regel 4): wirkt
-                # neben einer Schriftrolle der sechs Werte, hat also einen eigenen Platz.
+                # neben einer Schriftrolle der sechs Werte, hat also einen eigenen Platz -- aber
+                # er teilt sich mit jedem anderen Ausdauerbuff.
                 out[entry] = ("scroll", spell, req, ilvl, "fortitude", 1, name)
-    return out
+
+        if entry in out and use_spell in script_spells and entry not in AURA_OVERRIDE:
+            problems.append("%d %s: der Zauber %d ist ein Script des Kerns (spell_script_names); der Buff auf dem "
+                            "Charakter ist ein anderer Zauber. In AURA_OVERRIDE eintragen." % (entry, name, use_spell))
+    return out, problems
 
 
 def check_scrolls(items, groups):
@@ -246,9 +292,12 @@ def check_scrolls(items, groups):
         if kind != "scroll":
             continue
         inside = spell in groups["scroll"]
-        if family == "fortitude" and inside:
-            problems.append("%d %s steht in der Schriftrollengruppe (eigener Platz angenommen)" % (entry, name))
-        if family != "fortitude" and not inside:
+        if family == "fortitude":
+            if inside:
+                problems.append("%d %s steht in der Schriftrollengruppe (eigener Platz angenommen)" % (entry, name))
+            if spell not in groups["stamina"]:
+                problems.append("%d %s: Zauber %d steht nicht in Gruppe %d (Ausdauerbuffs)" % (entry, name, spell, STAMINA_GROUP))
+        elif not inside:
             problems.append("%d %s steht nicht in der Schriftrollengruppe %d" % (entry, name, SCROLL_GROUP))
     return problems
 
@@ -281,7 +330,8 @@ def render(items, groups):
         "--            scroll    Schriftrolle: eine Familie (strength ...) mit Rang. Die sechs Werte teilen sich",
         "--                      beim Server EINEN Platz (spell_group 1087, exklusiv); nur die",
         "--                      Runenschriftrolle (fortitude) hat einen eigenen",
-        "--   Zauber   der Zauber, den der Gegenstand wirkt und der als Buff auf dem Charakter liegt",
+        "--   Zauber   der Zauber, der als Buff auf dem Charakter liegt (meist der des Gegenstands; die Runen-",
+        "--            schriftrolle benutzt ein Script, der Buff ist ein anderer Zauber)",
         "--",
         "-- Nur Buffs, die im Kampf nuetzen. Wasseratmung, Unsichtbarkeit erkennen und andere",
         "-- Hilfsmittel stehen nicht darin: der Server fasst sie nicht in die Elixiergruppen.",
@@ -299,15 +349,23 @@ def render(items, groups):
     lines.append("}")
     lines.append("")
     lines += [
-        "-- Alle Zauber der beiden Elixiergruppen des Servers (spell_group 1 und 2), auch die, die kein",
-        "-- Elixier und kein Flaeschchen sind: Juju, Zanza, R.O.I.D.S., Wasserwandeln u. a. Wirkt einer",
-        "-- davon, ist der Platz belegt, und ein Elixier wuerde ihn ersetzen.",
+        "-- Zaubergruppen des Servers, mit allen Stufen. Nicht nur Elixiere und Flaeschchen: Wirkt irgendein Zauber",
+        "-- der Gruppe, ist der Platz belegt, und ein neuer Buff wuerde ihn ersetzen (oder wird abgewiesen).",
         "AT.ConsGroups = {",
+        "   -- spell_group 1 und 2: Kampf- und Waechterelixiere (Regel 1, einer wirkt); auch Juju, Zanza, R.O.I.D.S.,",
+        "   -- Wasserwandeln u. a. stehen darin",
         "   battle = {",
         _wrap_ids(groups["battle"]),
         "   },",
         "   guardian = {",
         _wrap_ids(groups["guardian"]),
+        "   },",
+        "   -- spell_group 1084, \"Single Stamina Buffs\" (Regel 4: nur der staerkste wirkt): Machtwort und Gebet der",
+        "   -- Seelenstaerke, Schriftrollen der Ausdauer, Runenschriftrolle. Eine Runenschriftrolle neben einem",
+        "   -- staerkeren dieser Buffs ist umsonst: der Kern verwirft den schwaecheren Buff, nachdem der Gegenstand",
+        "   -- verbraucht ist.",
+        "   stamina = {",
+        _wrap_ids(groups["stamina"]),
         "   },",
         "}",
         "",
@@ -326,9 +384,9 @@ def main(argv):
         print("item_template.sql nicht gefunden in %s" % world, file=sys.stderr)
         return 2
 
-    items = collect(world)
+    items, problems = collect(world)
     groups = collect_groups(world)
-    problems = check_scrolls(items, groups)
+    problems += check_scrolls(items, groups)
     if problems:
         for line in problems:
             print("Warnung: " + line, file=sys.stderr)

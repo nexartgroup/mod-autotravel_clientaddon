@@ -29,7 +29,11 @@
 --   Schriftrolle    (scroll)    Gruppe 1087, "exklusiv": die sechs Werte (Staerke, Beweglichkeit,
 --                               Intelligenz, Ausdauer, Willenskraft, Schutz) teilen sich EINEN Platz.
 --                               Eine neue Schriftrolle ENTFERNT die alte, auch die eines anderen Werts.
---   Runenschriftrolle der Seelenstaerke (fortitude): steht nicht in dieser Gruppe, eigener Platz.
+--   Runenschriftrolle der Seelenstaerke (fortitude): steht nicht in dieser Gruppe. Ihr Zauber ist nur ein
+--                               Script, der Buff auf dem Charakter ist Zauber 72590 (Gruppe 1084, "Single
+--                               Stamina Buffs", Regel 4: der staerkste gewinnt). Wirkt schon ein Ausdauerbuff
+--                               (Machtwort: Seelenstaerke, Schriftrolle der Ausdauer ...), ist die Rolle
+--                               umsonst: der Kern verwirft den schwaecheren Buff, NACHDEM sie verbraucht ist.
 -- Daraus folgt: ein Flaeschchen wird nur benutzt, wenn keiner der beiden Plaetze belegt ist, und ein
 -- Elixier nur, wenn sein Platz frei ist; eine Schriftrolle nur, wenn KEINE Schriftrolle wirkt. Sonst
 -- ersetzte das Addon einen Buff durch den anderen, fand den ersten wieder fehlend und benutzte ihn
@@ -44,16 +48,22 @@
 -- Spielers, wenn sie ein gueltiges Ziel ist, und sonst den Charakter selbst. Ist im Client ein
 -- Verbuendeter ausgewaehlt, wartet das Addon deshalb: die Schriftrolle ginge an ihn.
 --
--- Der Server benutzt nur, wenn der Charakter steht und nicht zaubert (UseItemAction::UseItem). Das
--- Addon sendet deshalb nichts, solange sich der Charakter bewegt oder zaubert. Auch ein Dauerzauber
--- zaehlt dort als Zauber: Automatisches Schiessen des Jaegers. Jaeger bekommen ihre Gegenstaende in
--- den 25 s nach dem Kampf.
+-- Der Server benutzt nur, wenn der Charakter steht und nicht zaubert (UseItemAction::UseItem). Als
+-- "bewegt" gilt dort jedes Bewegungsflag: laufen, strafen, FALLEN, steigen und sinken. Als "zaubert" gilt
+-- auch ein Kanalzauber (er wird sofort abgewiesen; nur ein Zauber mit Zauberzeit laesst den Befehl bis zu
+-- seinem Ende warten) und ein Dauerzauber: Automatisches Schiessen des Jaegers, ebenso das Schiessen mit
+-- dem Zauberstab. Das Addon sendet deshalb nichts, solange der Charakter laeuft, faellt oder zaubert.
+-- Jaeger bekommen ihre Gegenstaende in den 25 s nach dem Kampf.
+--
+-- Ein Befehl, waehrend dessen Wartezeit sich der Charakter bewegt oder zaubert, kann aus diesem Grund
+-- abgewiesen worden sein: das sagt nichts ueber den Gegenstand und zaehlt nicht als Fehlschlag (hoechstens
+-- MAX_UNCLEAR Mal in Folge).
 --
 -- Geht ein Gegenstand trotzdem nicht (ob ein Elixier im Kampf erlaubt ist, haengt vom Zauber ab; ein
--- staerkerer Buff derselben Art weist ihn ab; und der Client sieht den Grund nie): nach MAX_TRIES
--- Fehlschlaegen im Kampf wird er in den 25 s NACH dem Kampf versucht, nach weiteren ohne Erfolg gesperrt
--- -- mit wachsender Pause (90 s, 5 min, 15 min, 1 h), damit ein dauerhaft abgewiesener Gegenstand nicht
--- bei jedem Kampf Befehle und Meldungen erzeugt. Die Meldung kommt je Gegenstand einmal.
+-- staerkerer Buff derselben Art weist ihn ab; den Grund meldet der Server dem Client in der Regel nicht):
+-- nach MAX_TRIES Fehlschlaegen im Kampf wird er in den 25 s NACH dem Kampf versucht, nach weiteren ohne
+-- Erfolg gesperrt -- mit wachsender Pause (90 s, 5 min, 15 min, 1 h), damit ein dauerhaft abgewiesener
+-- Gegenstand nicht bei jedem Kampf Befehle und Meldungen erzeugt. Die Meldung kommt je Gegenstand einmal.
 --
 -- Sicherungen gegen Verschwendung (das sind Gegenstaende, die der Spieler gesammelt hat):
 --
@@ -61,9 +71,10 @@
 --     10 min, wenn nicht (dann ist die Erkennung unsicher, und es wird gewarnt).
 --   * hoechstens 10 Benutzungen in 2 Minuten, in der Summe aller Gegenstaende.
 --   * je Gegenstand wenige Versuche, dann eine wachsende Sperre.
---   * 3,5 s zwischen zwei Benutzungen (Abklingzeit der Kategorie: 3 s).
---   * 7 s Geduld, bevor ein Befehl als abgewiesen gilt: waehrend eines Zaubers wartet der Befehl auf
---     dessen Ende, und ein zweiter, gleich gesendeter verbrauchte sonst ein zweites Stueck.
+--   * 7 s Geduld, bevor ein Befehl als abgewiesen gilt: hinter einem Zauber mit Zauberzeit wartet er auf
+--     dessen Ende (PlayerbotAI::UpdateAI), und mit 3,5 s galt er dann faelschlich als abgewiesen.
+--   * Nach einer Benutzung 3,1 s ab dem Zeitpunkt, an dem sie zu sehen war: die Abklingzeit der Kategorie
+--     (Elixiere und Flaeschchen) laeuft ab der AUSFUEHRUNG, nicht ab dem Senden.
 --   * "/at buffs ignorieren <Link>" nimmt einen Gegenstand dauerhaft aus der Auswahl.
 -- ---------------------------------------------------------------------------
 
@@ -78,11 +89,12 @@ local C = AT.Cons
 -- (UseItemAction::UseItem): der erste Versuch beim Laufen bleibt stehen und scheitert, der zweite
 -- gelingt. Deshalb mehrere Versuche je Gegenstand.
 local TICK                = 0.5     -- Takt der Pruefung (s)
-local USE_GAP             = 3.5     -- zwischen zwei Benutzungen, vom Senden an gerechnet
 local VERIFY_AFTER        = 1.2     -- fruehestens so lange nach dem Senden wird das Ergebnis gelesen
 local VERIFY_UNTIL        = 7.0     -- spaetestens so lange wird abgewartet (ein Befehl wartet auf das Ende eines Zaubers)
 local QUEUE_TIMEOUT       = 20      -- ein Befehl, der so lange in der Warteschlange haengt, gilt als verloren
 local MAX_TRIES           = 3       -- Fehlschlaege je Gegenstand in Folge, dann Sperre
+local MAX_UNCLEAR         = 5       -- unklare Versuche (Charakter bewegte sich oder zauberte) in Folge, dann zaehlt es doch
+local AFTER_SEEN          = 3.1     -- Abstand zur naechsten Benutzung ab dem Zeitpunkt, an dem die letzte zu sehen war
 local BLOCK_STEPS         = { 90, 300, 900, 3600 }   -- Dauer der 1., 2., 3., 4. und jeder weiteren Sperre in Folge (s)
 local PEACE_DECAY         = 1800    -- so lange gilt "im Kampf ging es nicht", dann wird neu geprueft
 local GAP_VERIFIED        = 45      -- Mindestabstand je Platz, Buff nach der Benutzung gesehen
@@ -91,8 +103,9 @@ local RATE_WINDOW         = 120
 local RATE_MAX            = 10
 local AFTER_WINDOW        = 25      -- so lange nach dem Kampf werden Gegenstaende nachgeholt, die im Kampf nicht gingen
 
-C.TICK, C.USE_GAP = TICK, USE_GAP
+C.TICK = TICK
 C.VERIFY_UNTIL, C.MAX_TRIES, C.BLOCK_STEPS, C.PEACE_DECAY = VERIFY_UNTIL, MAX_TRIES, BLOCK_STEPS, PEACE_DECAY
+C.MAX_UNCLEAR, C.AFTER_SEEN = MAX_UNCLEAR, AFTER_SEEN
 
 -- Anzeige
 local KIND_LABEL = {
@@ -134,7 +147,7 @@ local index
 
 local function Index()
    if index then return index end
-   index = { battle = {}, guardian = {}, flask = {}, family = {}, scroll = {} }
+   index = { battle = {}, guardian = {}, flask = {}, family = {}, scroll = {}, stamina = {} }
    for _, d in pairs(Data()) do
       local kind, spell, fam = d[1], d[2], d[5]
       if kind == "flask" then
@@ -157,6 +170,7 @@ local function Index()
    if type(groups) == "table" then
       for _, spell in ipairs(groups.battle or {}) do index.battle[spell] = true end
       for _, spell in ipairs(groups.guardian or {}) do index.guardian[spell] = true end
+      for _, spell in ipairs(groups.stamina or {}) do index.stamina[spell] = true end
    end
    return index
 end
@@ -399,9 +413,12 @@ function C.Decide(stock, auras, o)
          end
       end
 
-      -- Die Runenschriftrolle der Seelenstaerke steht nicht in der Gruppe: eigener Platz.
+      -- Die Runenschriftrolle der Seelenstaerke steht nicht in der Gruppe der sechs Werte. Ihr Buff gehoert
+      -- aber zu den Ausdauerbuffs (Regel 4, der staerkste gewinnt): neben einem anderen waere sie umsonst.
       if AnyActive(idx.family.fortitude, auras) then
          why[#why + 1] = "Runenschriftrolle: wirkt"
+      elseif AnyActive(idx.stamina, auras) then
+         why[#why + 1] = "Runenschriftrolle: ein anderer Ausdauerbuff wirkt (der staerkere bleibt, die Rolle waere umsonst)"
       elseif not gapOk("fortitude") then
          why[#why + 1] = "Runenschriftrolle: Mindestabstand nach der letzten Benutzung"
       elseif not o.friendly then
@@ -526,9 +543,20 @@ function C.FriendlyTarget()
    return true
 end
 
--- Warum kann gerade nichts gesendet werden? nil, wenn nichts im Weg steht. Der Server benutzt nur,
--- wenn der Charakter steht und nicht zaubert; wer sendet, waehrend er sich bewegt, bekommt eine Absage,
--- die wie ein Fehlschlag des Gegenstands aussaehe.
+-- Laeuft, faellt oder zaubert der Charakter? Das sind die Zustaende, in denen der Server den Befehl abweist
+-- (UseItemAction::UseItem: isMoving() zaehlt laufen, strafen, fallen, steigen und sinken; IsNonMeleeSpellCast
+-- zaehlt auch Kanalzauber). nil, wenn nichts davon zutrifft; sonst der Grund als Text.
+local function Disturbance()
+   if UnitCastingInfo and UnitCastingInfo("player") then return "der Charakter zaubert" end
+   if UnitChannelInfo and UnitChannelInfo("player") then return "der Charakter kanalisiert einen Zauber" end
+   if GetUnitSpeed and (GetUnitSpeed("player") or 0) > 0 then return "der Charakter bewegt sich" end
+   if IsFalling and IsFalling() then return "der Charakter faellt" end
+   return nil
+end
+C.Disturbance = Disturbance
+
+-- Warum kann gerade nichts gesendet werden? nil, wenn nichts im Weg steht. Wer sendet, waehrend sich der
+-- Charakter bewegt oder zaubert, bekommt eine Absage, die wie ein Fehlschlag des Gegenstands aussaehe.
 function C.Blocker()
    if not B or not AT.GetBool("BotControl") or not B.IsRunning() then
       return "der Selbstmodus laeuft nicht"
@@ -537,11 +565,7 @@ function C.Blocker()
    if UnitOnTaxi and UnitOnTaxi("player") then return "der Charakter fliegt" end
    if IsMounted and IsMounted() then return "der Charakter reitet" end
    if UnitHasVehicleUI and UnitHasVehicleUI("player") then return "der Charakter sitzt in einem Fahrzeug" end
-   if (UnitCastingInfo and UnitCastingInfo("player")) or (UnitChannelInfo and UnitChannelInfo("player")) then
-      return "der Charakter zaubert"
-   end
-   if GetUnitSpeed and (GetUnitSpeed("player") or 0) > 0 then return "der Charakter bewegt sich" end
-   return nil
+   return Disturbance()
 end
 
 -- ---------------------------------------------------------------------------
@@ -565,7 +589,10 @@ local function OnSuccess(p, seen, now)
    local S = C.state
    local d = Data()[p.id]
    S.item[p.id] = nil
-   S.nextAt = math.max(now, (p.sentAt or now) + USE_GAP)
+   -- Die Abklingzeit der Kategorie (3 s fuer Elixiere und Flaeschchen) laeuft ab der Ausfuehrung, und die kann
+   -- nach dem Senden liegen, wenn der Charakter zauberte. Erst wenn die Benutzung zu sehen ist, steht fest,
+   -- dass sie ausgefuehrt wurde.
+   S.nextAt = now + AFTER_SEEN
    S.total = S.total + 1
    S.uses[#S.uses + 1] = now
 
@@ -602,8 +629,8 @@ local function OnFailure(p, now)
    local S = C.state
    local it = S.item[p.id] or { tries = 0, blocks = 0 }
    S.item[p.id] = it
+   it.unclear = 0
    it.tries = (it.tries or 0) + 1
-   S.nextAt = math.max(now, (p.sentAt or now) + USE_GAP)
 
    if it.tries < MAX_TRIES then
       NoteLast("kein Erfolg bei " .. (p.link or "?") .. " (Versuch " .. it.tries .. " von " .. MAX_TRIES .. ")")
@@ -628,6 +655,23 @@ local function OnFailure(p, now)
                "ein staerkerer Buff derselben Art koennen im Weg sein.")
       NoteLast("gesperrt fuer " .. secs .. " s: " .. (p.link or "?"))
    end
+end
+
+-- Der Charakter bewegte sich oder zauberte, waehrend der Befehl unterwegs war: der Server kann ihn aus diesem
+-- Grund abgewiesen haben. Das sagt nichts ueber den Gegenstand und zaehlt nicht als Fehlschlag -- sonst
+-- machten drei solche Zufaelle in Folge aus einem brauchbaren Gegenstand einen, der eine halbe Stunde
+-- nur nach dem Kampf benutzt wird. Wiederholt es sich MAX_UNCLEAR Mal, zaehlt es doch.
+local function OnUnclear(p, now)
+   local S = C.state
+   local it = S.item[p.id] or { tries = 0, blocks = 0 }
+   S.item[p.id] = it
+   it.unclear = (it.unclear or 0) + 1
+   if it.unclear >= MAX_UNCLEAR then
+      it.unclear = 0
+      OnFailure(p, now)
+      return
+   end
+   NoteLast("keine Wirkung bei " .. (p.link or "?") .. ", der Charakter bewegte sich oder zauberte (zaehlt nicht)")
 end
 
 -- Hat die letzte Benutzung gewirkt? true, wenn die Pruefung abgeschlossen ist.
@@ -661,7 +705,7 @@ local function Settle(now)
    end
    if dt >= VERIFY_UNTIL then
       S.pending = nil
-      OnFailure(p, now)
+      if p.disturbed then OnUnclear(p, now) else OnFailure(p, now) end
       return true
    end
    return false
@@ -685,8 +729,11 @@ function C.Tick(now, force)
    if S.pending then
       if not (B and AT.GetBool("BotControl") and B.IsRunning()) then
          S.pending = nil
-      elseif not Settle(now) then
-         return nil
+      else
+         -- Hat sich der Charakter waehrend des Wartens bewegt oder gezaubert, kann der Server den Befehl aus
+         -- diesem Grund abgewiesen haben (siehe OnUnclear).
+         if S.pending.sentAt and Disturbance() then S.pending.disturbed = true end
+         if not Settle(now) then return nil, "ein Befehl ist noch unterwegs" end
       end
    end
 
@@ -704,7 +751,9 @@ function C.Tick(now, force)
    else
       return nil
    end
-   if now < S.nextAt then return nil end
+   if now < S.nextAt then
+      return nil, string.format("Mindestabstand zur letzten Benutzung (noch %d s)", math.ceil(S.nextAt - now))
+   end
 
    local wanted = C.Wanted()
    if not AnyWanted(wanted) then return nil end
@@ -718,15 +767,17 @@ function C.Tick(now, force)
    end
 
    local stats = C.PreferredStats()
-   local e, key = C.Decide(C.Scan(), C.Auras(), {
+   local e, key, why = C.Decide(C.Scan(), C.Auras(), {
       level = UnitLevel("player"), wanted = wanted, ignore = C.IgnoreList(), state = S, now = now, mode = mode,
       stats = stats, friendly = C.FriendlyTarget(), afterAll = noCombat,
    })
-   if not e then return nil end
+   if not e then
+      if why and #why > 0 then return nil, table.concat(why, "; ") end
+      return nil
+   end
 
    local p = { id = e.id, key = key, link = e.link, queuedAt = now, countBefore = e.count, mode = mode }
-   S.pending = p
-   S.nextAt = now + USE_GAP        -- bis das Ergebnis da ist, wird nichts weiter gesendet
+   S.pending = p                   -- bis das Ergebnis da ist, wird nichts weiter gesendet
    NoteLast("versuche " .. e.link .. " (" .. Describe(e.d) .. ")")
    B.Whisper("u " .. e.link, function() p.sentAt = GetTime() end)
    return e
@@ -893,7 +944,7 @@ function C.Command(rest)
       if e then
          AT.Print("Versuche: " .. e.link)
       elseif why then
-         AT.Print("Gerade nicht: " .. why .. ".")
+         AT.Print("Nichts getan: " .. why .. ".")
       else
          AT.Print("Nichts zu tun.")
       end

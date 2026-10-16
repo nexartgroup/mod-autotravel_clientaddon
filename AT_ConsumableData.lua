@@ -11,7 +11,8 @@
 --            scroll    Schriftrolle: eine Familie (strength ...) mit Rang. Die sechs Werte teilen sich
 --                      beim Server EINEN Platz (spell_group 1087, exklusiv); nur die
 --                      Runenschriftrolle (fortitude) hat einen eigenen
---   Zauber   der Zauber, den der Gegenstand wirkt und der als Buff auf dem Charakter liegt
+--   Zauber   der Zauber, der als Buff auf dem Charakter liegt (meist der des Gegenstands; die Runen-
+--            schriftrolle benutzt ein Script, der Buff ist ein anderer Zauber)
 --
 -- Nur Buffs, die im Kampf nuetzen. Wasseratmung, Unsichtbarkeit erkennen und andere
 -- Hilfsmittel stehen nicht darin: der Server fasst sie nicht in die Elixiergruppen.
@@ -174,13 +175,14 @@ AT.ConsData = {
    [46377] = { "flask", 53760, 75, 85 },   -- Flask of Endless Rage
    [46378] = { "flask", 54212, 75, 85 },   -- Flask of Pure Mojo
    [46379] = { "flask", 53758, 75, 85 },   -- Flask of Stoneblood
-   [49632] = { "scroll", 69377, 80, 90, "fortitude", 1 },   -- Runescroll of Fortitude
+   [49632] = { "scroll", 72590, 80, 90, "fortitude", 1 },   -- Runescroll of Fortitude
 }
 
--- Alle Zauber der beiden Elixiergruppen des Servers (spell_group 1 und 2), auch die, die kein
--- Elixier und kein Flaeschchen sind: Juju, Zanza, R.O.I.D.S., Wasserwandeln u. a. Wirkt einer
--- davon, ist der Platz belegt, und ein Elixier wuerde ihn ersetzen.
+-- Zaubergruppen des Servers, mit allen Stufen. Nicht nur Elixiere und Flaeschchen: Wirkt irgendein Zauber
+-- der Gruppe, ist der Platz belegt, und ein neuer Buff wuerde ihn ersetzen (oder wird abgewiesen).
 AT.ConsGroups = {
+   -- spell_group 1 und 2: Kampf- und Waechterelixiere (Regel 1, einer wirkt); auch Juju, Zanza, R.O.I.D.S.,
+   -- Wasserwandeln u. a. stehen darin
    battle = {
       2367, 2374, 3160, 3164, 7844, 8212, 10667, 10669, 11328, 11334, 11390, 11405, 11406, 11474,
       16322, 16323, 16329, 17038, 17537, 17538, 17539, 17626, 17627, 17628, 17629, 21920, 26276,
@@ -196,5 +198,13 @@ AT.ConsGroups = {
       28520, 28521, 28540, 29348, 39625, 39626, 39627, 39628, 40567, 40568, 40572, 40573, 40575,
       40576, 41608, 41609, 41610, 41611, 42735, 46837, 46839, 53747, 53751, 53752, 53755, 53758,
       53760, 53763, 53764, 54212, 60343, 60347, 62380, 67016, 67017, 67018,
+   },
+   -- spell_group 1084, "Single Stamina Buffs" (Regel 4: nur der staerkste wirkt): Machtwort und Gebet der
+   -- Seelenstaerke, Schriftrollen der Ausdauer, Runenschriftrolle. Eine Runenschriftrolle neben einem
+   -- staerkeren dieser Buffs ist umsonst: der Kern verwirft den schwaecheren Buff, nachdem der Gegenstand
+   -- verbraucht ist.
+   stamina = {
+      1243, 1244, 1245, 2791, 8099, 8100, 8101, 10937, 10938, 12178, 21562, 21564, 23947, 23948,
+      25389, 25392, 33081, 43198, 48101, 48102, 48161, 48162, 72590,
    },
 }

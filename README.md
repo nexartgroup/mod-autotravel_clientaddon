@@ -252,14 +252,17 @@ Servers und gehen nie als `co`/`nc` hinaus.
 
 **Welche Gegenstaende.** Nur Buffs, die im Kampf nuetzen. Das entscheidet nicht eine Namensliste, sondern die Regel
 des Servers: Elixiere und Flaeschchen stehen in `spell_group` 1 (Kampf) oder 2 (Waechter). Wasseratmung,
-Wasserwandeln, Unsichtbarkeit und Untote erkennen, Traumsicht, Tarnung und aehnliche Hilfsmittel stehen in keiner
-Gruppe und fehlen. Schriftrollen: Staerke, Beweglichkeit, Intelligenz, Ausdauer, Willenskraft und Schutz (alle Stufen),
-dazu die Runenschriftrolle der Seelenstaerke; Rueckruf-Schriftrollen fehlen. Traenke und andere Verbrauchsgueter gehoeren
-nicht dazu.
+Unsichtbarkeit und Untote erkennen, Traumsicht, Tarnung und aehnliche Hilfsmittel stehen in keiner Gruppe und fehlen;
+das Elixier des Wasserwandelns steht zwar in Gruppe 2, ist aber kein Kampfbuff und fehlt ausdruecklich (sein Platz gilt
+trotzdem als belegt, siehe unten). Schriftrollen: Staerke, Beweglichkeit, Intelligenz, Ausdauer, Willenskraft und Schutz
+(alle Stufen), dazu die Runenschriftrolle der Seelenstaerke; Rueckruf-Schriftrollen fehlen. Traenke und andere
+Verbrauchsgueter gehoeren nicht dazu. Nicht aufgenommen, weil ihr Zauber nur ein Script ist und die Datenbank nicht
+verraet, was es wirkt: *Flask of the North* und die Mixtures der Alchemisten (`tools/gen_consumables.py` fuehrt sie
+einzeln auf und bricht ab, wenn ein weiteres Flaeschchen unbemerkt fehlte).
 
 Als **belegt** gilt ein Platz auch, wenn dort ein Zauber wirkt, der kein Elixier ist: die Gruppen des Servers enthalten
-auch Juju, Zanza, R.O.I.D.S., Lungensaft, Wasserwandeln u. a. (`AT.ConsGroups` in `AT_ConsumableData.lua`). Wirkt eines,
-benutzt das Addon dort kein Elixier -- der Server ersetzte es.
+auch Juju, Zanza, R.O.I.D.S., Lungensaft, Wasserwandeln u. a. (`AT.ConsGroups` in `AT_ConsumableData.lua`; 25 Zauber, die
+zu keinem aufgenommenen Gegenstand gehoeren). Wirkt eines, benutzt das Addon dort kein Elixier -- der Server ersetzte es.
 
 **Plaetze.** Die Regeln des Servers bestimmen, was sich vertraegt, und das Addon richtet sich danach -- sonst
 ersetzte es einen Buff durch den anderen, fand den ersten wieder fehlend und verbrauchte den ganzen Vorrat:
@@ -270,7 +273,7 @@ ersetzte es einen Buff durch den anderen, fand den ersten wieder fehlend und ver
 | Waechterelixier | ebenso |
 | Flaeschchen | belegt beide Plaetze. Es wird nur benutzt, wenn **keiner** der beiden belegt ist; wirkt ein Flaeschchen, bleiben die Elixiere liegen |
 | Schriftrolle | **ein einziger Platz fuer alle sechs Werte** (`spell_group` 1087, "exklusiv"): eine neue Schriftrolle *entfernt* die alte, auch die eines anderen Werts. Wirkt irgendeine, ist der Platz belegt; gewaehlt wird ein Wert (siehe unten) und davon die hoechste Stufe, die der Charakter tragen darf |
-| Runenschriftrolle der Seelenstaerke | steht nicht in dieser Gruppe: eigener Platz, wirkt neben einer Schriftrolle |
+| Runenschriftrolle der Seelenstaerke | steht nicht in dieser Gruppe, wirkt also neben einer Schriftrolle. Ihr Zauber ist nur ein Script, der Buff auf dem Charakter ist Zauber 72590, und der gehoert zu den **Ausdauerbuffs** (`spell_group` 1084, "der staerkste gewinnt"). Wirkt schon einer (Machtwort: Seelenstaerke, Gebet der Seelenstaerke, Schriftrolle der Ausdauer), bleibt sie liegen: der Kern verwirft den schwaecheren Buff, *nachdem* sie verbraucht ist |
 
 **Welche Schriftrolle.** Weil nur eine wirkt, waehlt das Addon *einen* Wert, statt sie reihum zu benutzen (das
 verbrauchte mehrere je Kampf, denn jede ersetzte die vorige und liess sie wieder fehlen -- das war bis 11.6 so). Die
@@ -304,14 +307,22 @@ den Verbrauch, aber keinen Buff und sperrt den Platz zehn Minuten.
 * Nach einer Benutzung gilt je Platz ein Mindestabstand: 45 s, wenn der Buff danach zu sehen war; **10 Minuten**,
   wenn der Gegenstand verbraucht wurde, der Buff aber nicht zu sehen war (dann ist die Erkennung unsicher, und das
   Addon warnt einmal).
-* Hoechstens 10 Benutzungen in 2 Minuten, 3,5 s zwischen zwei Benutzungen (die Kategorie hat 3 s Abklingzeit).
+* Hoechstens 10 Benutzungen in 2 Minuten. Nach einer Benutzung vergehen 3,1 s, **ab dem Moment, in dem sie zu sehen
+  ist**: die Abklingzeit der Kategorie (3 s fuer Elixiere und Flaeschchen) laeuft ab der Ausfuehrung, nicht ab dem
+  Senden, und die kann hinter einem Zauber liegen.
 * Der Server benutzt nur, wenn der Charakter steht und nicht zaubert. Das Addon sendet deshalb nicht, solange der
-  Charakter **laeuft**, zaubert, fliegt, reitet oder in einem Fahrzeug sitzt; ein Befehl, der waehrend der Bewegung
-  hinausginge, wuerde abgewiesen und als Fehlschlag des Gegenstands zaehlen.
+  Charakter **laeuft, faellt**, zaubert (auch Kanalzauber), fliegt, reitet oder in einem Fahrzeug sitzt; ein Befehl,
+  der waehrend der Bewegung hinausginge, wuerde abgewiesen und als Fehlschlag des Gegenstands zaehlen.
+* Bewegt sich der Charakter oder zaubert er, *waehrend* ein Befehl unterwegs ist, kann der Server ihn aus diesem Grund
+  abgewiesen haben. Das sagt nichts ueber den Gegenstand: es zaehlt nicht als Fehlschlag (hoechstens fuenfmal in Folge,
+  dann doch).
 * **Jaeger** bekommen im Kampf nichts: der Server zaehlt das Automatische Schiessen als Zauber (`UseItemAction` fragt
   `IsNonMeleeSpellCast(false)`), und der Client sieht es nicht. Fuer sie kommt alles **in den 25 s nach dem Kampf**.
-* Ein Befehl gilt erst nach 7 s als abgewiesen: laeuft gerade ein Zauber, wartet er auf dessen Ende. Mit 3,5 s ging
-  ein zweiter Befehl hinaus, bevor der erste ausgefuehrt war, und verbrauchte ein zweites Stueck.
+  Auch das Schiessen mit dem Zauberstab ist so ein Dauerzauber; wer es im Kampf benutzt, bekommt Abweisungen, die
+  die Sperren unten auffangen.
+* Ein Befehl gilt erst nach 7 s als abgewiesen: hinter einem Zauber mit Zauberzeit wartet er auf dessen Ende
+  (`PlayerbotAI::UpdateAI`), ein Kanalzauber weist ihn sofort ab. Mit 3,5 s galt ein wartender Befehl faelschlich als
+  abgewiesen.
 * Geht ein Gegenstand im Kampf nicht (drei Fehlschlaege in Folge), merkt sich das Addon das (eine halbe Stunde lang) und
   benutzt ihn **in den 25 s nach dem Kampf** (ob ein Elixier im Kampf erlaubt ist, haengt vom Zauber ab und laesst
   sich im Client nicht lesen). Klappt es auch dann nicht, ist der Gegenstand gesperrt -- mit **wachsender Pause**
@@ -378,30 +389,43 @@ Das Addon spricht Protokoll 4 und versteht auch Module mit Protokoll 3.
 
 ## Aenderungen in 11.7
 
-Befunde einer dritten, unabhaengigen Pruefung von 11.6. Jeder wurde an der Server-Quelle (AzerothCore,
+Befunde einer dritten und einer vierten, unabhaengigen Pruefung von 11.6. Jeder wurde an der Server-Quelle (AzerothCore,
 mod-playerbots) nachvollzogen, bevor etwas geaendert wurde.
 
 * **Schriftrollen sind ein einziger Platz** (`spell_group` 1087 ist "exklusiv", die sechs Werte stehen darin): bis 11.6
   benutzte das Addon die Werte reihum, jede Rolle ersetzte die vorige, die vorige fehlte wieder und kam nach 45 s erneut
   dran -- vier bis sechs Rollen je Kampf, mit nie mehr als einer wirkenden. Jetzt wirkt eine, der Wert richtet sich nach
-  Klasse und Talentbaum, `/at buffs wert` ueberschreibt ihn. Die Runenschriftrolle der Seelenstaerke hat einen eigenen
-  Platz.
+  Klasse und Talentbaum, `/at buffs wert` ueberschreibt ihn. Die Runenschriftrolle der Seelenstaerke steht nicht in der
+  Gruppe und wirkt neben einer Schriftrolle (siehe unten).
+* **Runenschriftrolle** (Fehler schon in 11.6, von der vierten Pruefung gefunden): ihr Zauber 69377 ist nur ein
+  Script (`spell_item_runescroll_of_fortitude`), der Buff auf dem Charakter ist Zauber 72590. Das Addon wartete auf
+  einen Buff, der nie erschien, und benutzte alle 10 Minuten die naechste Rolle unter dem laufenden Buff. Ausserdem
+  steht 72590 in der Gruppe der Ausdauerbuffs (Regel 4, "der staerkste gewinnt"): neben Machtwort: Seelenstaerke ist
+  die Rolle verbraucht und ihr Buff sofort weg. Jetzt fuehrt die Tabelle 72590, und die Rolle bleibt liegen, solange
+  ein Ausdauerbuff wirkt. `tools/gen_consumables.py` bricht ab, wenn ein Gegenstand einen Script-Zauber benutzt, den
+  niemand aufgeloest hat, oder ein Flaeschchen unbemerkt fehlt.
 * **Jaeger**: im Kampf geht nichts (Automatisches Schiessen zaehlt als Zauber); alles in den 25 s danach.
-* **Bewegung**: waehrend sich der Charakter bewegt, wird nichts gesendet und kein Fehlschlag gezaehlt.
+* **Bewegung**: waehrend der Charakter laeuft, faellt oder zaubert (auch Kanalzauber), wird nichts gesendet; ein
+  Befehl, der durch eine solche Bewegung abgewiesen wurde, zaehlt nicht als Fehlschlag des Gegenstands.
 * **Fehlschlaege**: drei statt fuenf Versuche, "im Kampf ging es nicht" verfaellt nach 30 min, Sperren wachsen
   (90 s, 5 min, 15 min, 1 h), jede Meldung kommt je Gegenstand einmal. Vorher: ein dauerhaft abgewiesener Gegenstand
   erzeugte bei jedem Kampf fuenf Befehle und eine Meldung (sechs Rollen: 168 Befehle und 33 Meldungen in 30 min).
-* **Geduld**: ein Befehl gilt erst nach 7 s als abgewiesen (vorher 3,5 s); ein Zauber im Weg verzoegert die Ausfuehrung.
+* **Geduld**: ein Befehl gilt erst nach 7 s als abgewiesen (vorher 3,5 s); ein Zauber mit Zauberzeit im Weg
+  verzoegert die Ausfuehrung. Der Abstand zur naechsten Benutzung zaehlt ab dem Sichtbarwerden der letzten (3,1 s), weil
+  die Abklingzeit der Kategorie ab der Ausfuehrung laeuft.
 * **Verbuendeter als Ziel**: eine Schriftrolle wartet, solange im Client ein Verbuendeter ausgewaehlt ist.
 * **Belegte Plaetze**: die Gruppen 1 und 2 des Servers werden ganz gelesen (`AT.ConsGroups`): Juju, Zanza, R.O.I.D.S.,
   Wasserwandeln u. a. belegen den Platz, ein Elixier ersetzte sie nicht mehr.
 * Ein Flaeschchen folgt nicht auf ein Elixier, dessen Buff nicht zu sehen war.
 * Ein Haken bei den Verbrauchsguetern sendet das Profil nicht mehr neu (es sind keine Strategien des Servers).
-* `/at buffs jetzt` nennt den Grund, wenn nichts geschieht; `/at buffs` zeigt Hindernisse und die Wahl der Schriftrolle.
+* `/at buffs jetzt` nennt den Grund, wenn nichts geschieht (Hindernis, Mindestabstand, belegter Platz ...); `/at buffs`
+  zeigt Hindernisse und die Wahl der Schriftrolle.
 * `tools/gen_consumables.py` liest auch `spell_ranks` und bricht ab, wenn eine Schriftrolle nicht mehr in der
   exklusiven Gruppe des Servers steht.
-* Tests: ein Modell des Servers (Ausfuehrung nach Verzoegerung, Abweisung bei Bewegung oder Dauerzauber, Verdraengung
-  innerhalb der exklusiven Gruppen) und 256 neue Pruefungen; 38 absichtlich eingebaute Fehler werden alle erkannt.
+* Tests: ein Modell des Servers (Ausfuehrung nach Verzoegerung, Warten hinter einem Zauber, sofortige Abweisung bei
+  Kanalzauber, Bewegung oder Fallen, Dauerzauber, Stufe, Abklingzeit der Kategorie, Verdraengung innerhalb der exklusiven
+  Gruppen, das Script der Runenschriftrolle, "der staerkste gewinnt" bei den Ausdauerbuffs) und rund 370 neue
+  Pruefungen. Absichtlich in die Logik eingebaute Fehler (rund 75 Varianten) werden alle von den Tests erkannt.
 * Das Protokoll aendert sich nicht.
 
 ## Aenderungen in 11.6
