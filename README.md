@@ -101,6 +101,9 @@ Die Pruefung bleibt beim Server; die gesperrten Knoepfe sind nur Komfort.
 | `/at profil bearbeiten` | Profil-Editor oeffnen |
 | `/at profil reset <name>`, `/at profil reset alle` | vorgegebene Profile auf die Standardwerte zuruecksetzen |
 | `/at bot`, `/at botan`, `/at botaus` | Playerbot-Steuerung / Selbstmodus |
+| `/at buffs` | Verbrauchsgueter im Kampf: was in den Taschen liegt, was wirkt, was als Naechstes drankommt (ab 11.6) |
+| `/at buffs jetzt` | einen Schritt sofort ausfuehren, auch ausserhalb des Kampfes (zum Ausprobieren) |
+| `/at buffs ignorieren <Link>`, `erlauben <Link>`, `liste`, `zuruecksetzen` | einen Gegenstand ausschliessen / wieder erlauben / Liste anzeigen / Sperren und Mindestabstaende loeschen |
 | `/at karte <id>`, `/at karten` | Karten-ID erzwingen / Kartentabelle neu aufbauen |
 | `/at optionen`, `/at panel`, `/at knopf`, `/at debug` | Oberflaeche und Diagnose |
 | `/at ui` | Diagnose: Zustand der Panel-Knoepfe (frei / gesperrt), Zaehler fuer Betreten und Klicks des Uebernehmen-Knopfes, was unter der Maus liegt |
@@ -129,7 +132,9 @@ Stadtkarte, 24 yd auf einer Zonenkarte).
 
 Optional steuert das Addon den Selbstmodus von mod-playerbots mit (Profile wie
 *Verteidigen*, *Aggressiv*, eigene Profile). Gesendet werden nur Strategiebefehle
-(`co`, `nc`, `ll`); `new rpg` wird in jedem festen Profil abgeschaltet, weil es
+(`co`, `nc`, `ll`), seit 11.5 die Haltung des Begleiters (`pet aggressive|defensive|passive`) und,
+seit 11.6, `u <Gegenstand>` fuer Flaeschchen, Elixiere und Schriftrollen im Kampf;
+`new rpg` wird in jedem festen Profil abgeschaltet, weil es
 Ausruestung wechseln kann. Der Erbstueckschutz legt ein vom Bot abgelegtes
 Erbstueck wieder an.
 
@@ -191,6 +196,108 @@ einmal neu an den Bot (nicht bei jedem Klick).
   keine Strategien. Aeltere BotPad-Staende (vor 1.2) schickten dem Bot weiter
   eigene Strategien und gaben jede Meldung doppelt aus.
 
+### Traenke, Wartung und Begleiter (ab 11.5)
+
+Die Profile steuern jetzt auch, was mod-playerbots dafuer anbietet. Geprueft wurde das am Quelltext
+von mod-playerbots, nicht geraten:
+
+| Wunsch | Was der Bot dafuer hat | Im Profil |
+|---|---|---|
+| Heiltraenke benutzen | Kampfstrategie `potions`: Gesundheitsstein oder Heiltrank bei kritischer Gesundheit, Manatrank bei wenig Mana. Der Server schaltet sie von sich aus **an** | Kampfflagge `potions` |
+| Rezepte lernen, verzaubern, Questgegenstaende benutzen | Nichtkampfstrategie `maintenance` (Standard: **aus**): bei Gelegenheit `use random recipe`, `enchant random item` und `disenchant random item` (Beruf noetig), `use random quest item`, Questlog aufraeumen, Quests teilen und `smart destroy item` | Nichtkampfflagge `maintenance` -- nur als Buendel, die Teile lassen sich nicht einzeln schalten |
+| Questobjekte einsammeln | steckt in `nc +loot`: der Bot nimmt Leichen **und Objekte** in der Naehe auf, auch Questobjekte, fuer die eine Quest laeuft; `ll normal` laesst Questgegenstaende zu | Nichtkampfflagge `loot` (schon vorhanden: Normal, Aggressiv, Plus) |
+| Haltung des Begleiters | Chatbefehl `pet aggressive`, `pet defensive`, `pet passive` (kein Strategiewert) | Knopf *Haltung* im Profil: unveraendert / aggressiv / defensiv / passiv |
+| Schriftrollen, Elixiere, Flaeschchen benutzen | **keine Strategie**: der Bot benutzt sie nie von selbst (`buff` zeigt sie nur an, `s`/`b`/`give` verkaufen oder verschieben sie). Er kennt aber den Befehl `u <Gegenstand>` -- das Addon liest die Taschen und fluestert ihn (ab 11.6, siehe unten) | Kaestchen *Flaeschchen*, *Elixiere*, *Schriftrollen* im Profil |
+
+* **`potions`** ist in den vorgegebenen Profilen nicht gesetzt (der Server-Standard bleibt: an). In
+  einem vorgegebenen Profil schaltet ein Klick durch *nicht gesetzt - an - aus*; `-potions` spart die
+  eigenen Traenke. In **eigenen Profilen** gilt fuer ein Profil, das vor 11.5 gespeichert wurde, der Standard
+  des Servers (an) -- nichts aendert sich still --; abwaehlen speichert ausdruecklich `-potions`.
+* **`maintenance`** ist aus, solange du es nicht einschaltest. Das Buendel kann bei fast vollen Taschen
+  (ab 90 %) Ueberfluessiges **vernichten** (`smart destroy item`) und zufaellig verzaubern oder entzaubern;
+  schalte es nur ein, wenn du das willst. Verzaubern und Entzaubern brauchen den Beruf.
+* **Begleiter.** Die Haltung geht beim Anwenden des Profils als `pet <Haltung>` an den Bot, aber nur, wenn du
+  einen Begleiter hast (sonst antwortet der Bot mit einer Fehlermeldung). Rufst du ihn spaeter (Jaeger,
+  Hexenmeister, Magier-Elementar, Schattengeist ...), zieht das Addon die Haltung eine Sekunde nach
+  dem Ereignis `UNIT_PET` nach. Der Wert wird nur aus den drei erlaubten Woertern gebildet; ein beschaedigter
+  Eintrag in der gespeicherten Datei wird verworfen und nie als Befehl gesendet. *unveraendert* sendet nichts.
+  Die vorgegebenen Profile setzen keine Haltung; stell sie nach Wunsch ein (Minimal und Aengstlich
+  etwa auf passiv).
+
+### Verbrauchsgueter: Flaeschchen, Elixiere, Schriftrollen (ab 11.6)
+
+mod-playerbots benutzt von sich aus nur Heil- und Manatraenke. Den Befehl `u <Gegenstand>` kennt es aber:
+er benutzt einen Gegenstand aus den Taschen (`UseItemAction`; Gegenstaende werden an der Kennung im
+Link erkannt). Das Addon liest deshalb die Taschen und fluestert dem Bot im Kampf, was fehlt. Der Weg ist
+derselbe wie bei `e <Erbstueck>`: eine Fluesternachricht an dich selbst. Der Client selbst darf Gegenstaende
+im Kampf nicht benutzen (`UseContainerItem` ist geschuetzt), eine Chatnachricht schon.
+
+**Einschalten.** Im Profil-Editor (*Interface -> AddOns -> AutoTravel -> Profile*, oder `/at profil bearbeiten`)
+gibt es drei Kaestchen: *Flaeschchen*, *Elixiere*, *Schriftrollen*. Sie gelten fuer das jeweilige Profil und sind in
+**allen vorgegebenen Profilen aus**. Bei vorgegebenen Profilen wechselt ein Klick aus - an (`+`); anders als bei
+den Strategien gibt es kein "ausdruecklich aus", denn ohne Eintrag ist nichts erlaubt. Es sind keine Strategien des
+Servers und gehen nie als `co`/`nc` hinaus.
+
+**Was geschieht.** Alle 0,5 s, aber nur im Kampf, nur im Selbstmodus und nur fuer die erlaubten Arten:
+
+1. Die Taschen (Rucksack und vier Taschen) werden gelesen. Erkannt wird, was in `AT_ConsumableData.lua`
+   steht: 36 Flaeschchen, 40 Kampf- und 29 Waechterelixiere, 49 Schriftrollen. Die Tabelle stammt aus der
+   Datenbank des Servers (`tools/gen_consumables.py`) und haengt nur an Kennungen, nicht an der Sprache deines Clients.
+2. Die Buffs des Charakters werden mit den Zaubern der Gegenstaende verglichen.
+3. Fehlt ein Buff und liegt ein passender Gegenstand in den Taschen, geht `u <Link>` an den Bot.
+4. Das Ergebnis wird geprueft (Gegenstand weniger? Buff da?). Laeuft der Buff aus, fehlt er wieder, und der naechste
+   Gegenstand derselben Art kommt dran -- solange der Vorrat reicht. Es gibt keine Zeitschaltuhr, der Buff selbst
+   ist der Zustand.
+
+**Welche Gegenstaende.** Nur Buffs, die im Kampf nuetzen. Das entscheidet nicht eine Namensliste, sondern die Regel
+des Servers: Elixiere und Flaeschchen stehen in `spell_group` 1 (Kampf) oder 2 (Waechter). Wasseratmung,
+Wasserwandeln, Unsichtbarkeit und Untote erkennen, Traumsicht, Tarnung und aehnliche Hilfsmittel stehen in keiner
+Gruppe und fehlen. Schriftrollen: Staerke, Beweglichkeit, Intelligenz, Ausdauer, Willenskraft und Schutz (alle Stufen),
+dazu die Runenschriftrolle der Seelenstaerke; Rueckruf-Schriftrollen fehlen. Traenke und andere Verbrauchsgueter gehoeren
+nicht dazu.
+
+**Plaetze.** Die Regeln des Servers bestimmen, was sich vertraegt, und das Addon richtet sich danach -- sonst
+ersetzte es einen Buff durch den anderen, fand den ersten wieder fehlend und verbrauchte den ganzen Vorrat:
+
+| Platz | Regel |
+|---|---|
+| Kampfelixier | je Charakter wirkt eines; gewaehlt wird das mit der hoechsten Gegenstandsstufe, das der Charakter tragen darf |
+| Waechterelixier | ebenso |
+| Flaeschchen | belegt beide Plaetze. Es wird nur benutzt, wenn **keiner** der beiden belegt ist; wirkt ein Flaeschchen, bleiben die Elixiere liegen |
+| Schriftrolle | je Wert (Staerke ...) wirkt eine; gewaehlt wird die hoechste Stufe, die der Charakter tragen darf. Wirkt irgendeine Stufe, ist der Wert erledigt |
+
+**Sicherungen gegen Verschwendung.** Das sind Gegenstaende, die du gesammelt hast.
+
+* Nach einer Benutzung gilt je Platz ein Mindestabstand: 45 s, wenn der Buff danach zu sehen war; **10 Minuten**,
+  wenn der Gegenstand verbraucht wurde, der Buff aber nicht zu sehen war (dann ist die Erkennung unsicher, und das
+  Addon warnt einmal).
+* Hoechstens 10 Benutzungen in 2 Minuten, 3,5 s zwischen zwei Benutzungen (die Kategorie hat 3 s Abklingzeit).
+* Der Server benutzt nur, wenn der Charakter steht und nicht zaubert. Das Addon sendet deshalb nicht, solange du
+  zauberst, fliegst, reitest oder in einem Fahrzeug sitzt, und versucht es je Gegenstand bis zu fuenfmal.
+* Geht ein Gegenstand im Kampf nicht (fuenf Fehlschlaege), merkt sich das Addon das fuer die Sitzung und benutzt ihn
+  **in den 25 s nach dem Kampf** (ob ein Elixier im Kampf erlaubt ist, haengt vom Zauber ab und laesst sich im Client
+  nicht lesen). Klappt es auch dann nicht, ist der Gegenstand 90 s gesperrt, und du erfaehrst es.
+* `/at buffs ignorieren [Link]` nimmt einen Gegenstand dauerhaft aus der Auswahl (kontoweit gespeichert), `erlauben`
+  holt ihn zurueck. **Gewaehlt wird aus dem, was in den Taschen liegt**: was der Charakter nicht benutzen soll,
+  gehoert nicht hinein oder auf die Liste.
+
+**Anzeige.** `/at buffs` zeigt das Profil und die erlaubten Arten, jeden bekannten Gegenstand mit Anzahl, Platz und
+Zustand (*Buff wirkt*, *ignoriert*, *nur nach dem Kampf*, *gesperrt*, *ab Stufe n*), was als Naechstes drankaeme und
+warum nicht, was zuletzt geschah. `/at buffs jetzt` fuehrt einen Schritt auch ausserhalb des Kampfes aus -- zum
+Ausprobieren. Jede gelungene Benutzung steht im Chat (`Benutzt: [Gegenstand] (Kampfelixier, noch 2)`); der Bot
+antwortet zusaetzlich selbst ("Using ...").
+
+**Grenzen.**
+
+* **Nicht im Spiel getestet.** Die Tests laufen gegen eine Attrappe der WoW-API; ob der Client `UnitBuff` mit der
+  Zauberkennung als elftem Rueckgabewert liefert (3.3.5a tut es), ob der Server den Befehl im Kampf annimmt und wie
+  schnell, zeigt nur das Spiel. Liefert der Client keine Zauberkennung, gilt der Name des Zaubers.
+* Das Addon weiss nicht, welche Klasse oder Rolle ein Buff nuetzt: es benutzt, was in den Taschen liegt und zur
+  erlaubten Art gehoert. Eine Magierin mit einer Schriftrolle der Staerke bekommt sie.
+* Nur Elixiere, Flaeschchen und Schriftrollen der Datenbank von AzerothCore. Eigene Gegenstaende des Servers fehlen;
+  wer die Tabelle erneuern will: `tools/gen_consumables.py <azerothcore>` (mit `--check` zum Vergleichen).
+* Selbstmodus erforderlich (`/at botan`): ohne ihn fuehrt niemand den Befehl aus.
+
 ## Verbindung und Protokoll
 
 Das Addon sendet Befehle als Chatzeilen (`.at ...`). Ohne das Servermodul
@@ -222,6 +329,26 @@ sodass er den Stop nicht auf der Leitung ueberholt. Gleichartige wartende Befehl
 Regler nur seinen letzten Wert meldet. Das Format der Nachrichten und die
 Versionsregeln stehen in der README von mod-autotravel (Abschnitt "Protokoll").
 Das Addon spricht Protokoll 4 und versteht auch Module mit Protokoll 3.
+
+## Aenderungen in 11.6
+
+* **Verbrauchsgueter im Kampf** (siehe "Verbrauchsgueter: Flaeschchen, Elixiere, Schriftrollen"): drei neue
+  Profilwerte *Flaeschchen*, *Elixiere*, *Schriftrollen*, der Befehl `/at buffs`, die Dateien
+  `AT_Consumables.lua` und `AT_ConsumableData.lua` und das Werkzeug `tools/gen_consumables.py`. Die vorgegebenen
+  Profile bleiben, wie sie waren: nichts ist erlaubt.
+* `B.Whisper(text, onSent)` meldet, wann eine Nachricht wirklich hinausgeht; die Warteschlange haelt sie unter
+  Umstaenden zurueck.
+* Tests: rund 700 neue Pruefungen (Tabelle, Profilwerte, Auswahl, Sicherungen, Nachholen nach dem Kampf, Befehle);
+  `luacheck` kennt `UnitBuff`, `IsMounted`, `GetContainerItemInfo` und `GetItemInfo`.
+* Das Protokoll aendert sich nicht.
+
+## Aenderungen in 11.5
+
+* **Neue Profilwerte**: Kampfflagge `potions`, Nichtkampfflagge `maintenance` und die Haltung des
+  Begleiters (siehe "Traenke, Wartung und Begleiter"). Eigene Profile aus aelteren Versionen behalten ihr
+  Verhalten: `potions` gilt dort als an, `maintenance` als aus, die Haltung ist nicht gesetzt.
+* Tests: 88 neue Pruefungen; `UnitExists` steht in den erlaubten Namen von luacheck.
+* Das Protokoll aendert sich nicht.
 
 ## Aenderungen in 11.4
 
@@ -293,8 +420,9 @@ reagiert bzw. welche Strategien der Bot gerade hat.
 ## Gespeicherte Daten
 
 `AutoTravelDB` (je Charakter): Einstellungen, Fensterposition, aktives Profil.
-`AutoTravelGlobalDB` (kontoweit): eigene Playerbot-Profile (`custom`) und deine Aenderungen
-an den vorgegebenen (`builtin`; nur Profile, die du geaendert hast).
+`AutoTravelGlobalDB` (kontoweit): eigene Playerbot-Profile (`custom`), deine Aenderungen
+an den vorgegebenen (`builtin`; nur Profile, die du geaendert hast) und die Gegenstaende, die du von den
+Verbrauchsguetern ausgeschlossen hast (`consIgnore`).
 Beim Aktualisieren aus einer aelteren Fassung bleiben alle Werte erhalten; fehlende
 neue Einstellungen erhalten Standardwerte. Der fruehere Standardbefehl
 `.playerbots bot self on/off` wird auf den heutigen Umschalter umgestellt, falls du
@@ -310,7 +438,10 @@ Benoetigt `lua5.1` (die Version, die WoW 3.3.5a benutzt), optional `luacheck`.
 Drei Schritte: `luacheck` (findet nicht vorhandene Namen, etwa einen Aufruf vor
 seiner Deklaration), Syntaxpruefung, und `tests/run.lua`: laedt das Addon in eine
 Attrappe der WoW-API (`tests/mock_wow.lua`) und prueft Handschlag,
-Warteschlange, Protokoll, Uebergabe, Routenaufteilung und Berechtigungen.
+Warteschlange, Protokoll, Uebergabe, Routenaufteilung, Berechtigungen und die Verbrauchsgueter.
+
+`tools/gen_consumables.py <azerothcore> --check` vergleicht `AT_ConsumableData.lua` mit der Datenbank eines
+AzerothCore-Checkouts (braucht nur Python 3); es gehoert nicht zu `tests/check.sh`.
 
 **Was das nicht prueft:** Aussehen und Anordnung, und ob die echte API sich so
 verhaelt wie die Attrappe. Die Attrappe kennt nur Funktionen, die es in 3.3.5a
@@ -326,6 +457,8 @@ gibt, ersetzt aber keinen Test im Spiel.
 | `AT_UI.lua` | Panel und Minimap-Knopf |
 | `AT_Options.lua`, `AT_Profiles.lua` | Einstellungsseiten (mit Scrollbereich) |
 | `AT_Bot.lua`, `AT_Gear.lua` | Playerbot-Selbstmodus, Erbstueckschutz |
+| `AT_Consumables.lua` | Verbrauchsgueter: Taschen lesen, Buffs pruefen, `u <Link>` fluestern, Sicherungen, `/at buffs` |
+| `AT_ConsumableData.lua` | **erzeugt**: Flaeschchen, Elixiere, Schriftrollen mit Zauber und Stufe (`tools/gen_consumables.py`) |
 | `AT_Carbonite.lua`, `AT_MapIds.lua` | Ziel aus Carbonite, Zonenname -> Karten-ID |
 | `Bindings.xml` | Tastenbelegung |
 

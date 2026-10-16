@@ -35,7 +35,7 @@ local AT = AutoTravel
 local CB = AT.Carb
 local N  = AT.Net
 
-AT.VERSION = "11.4"
+AT.VERSION = "11.6"
 local PREFIX = "|cff33ccffAutoTravel|r: "
 
 -- Anzeigenamen fuer Optionen -> Tastaturbelegung (siehe Bindings.xml).
@@ -677,6 +677,7 @@ local function Help()
       "/at profil reset <name|alle>  vorgegebene Profile auf den Standard",
       "/at bot               Playerbot-Steuerung an/aus",
       "/at erbstuecke        geschuetzte Erbstuecke anzeigen",
+      "/at buffs             Flaeschchen, Elixiere, Schriftrollen im Kampf (Zustand; jetzt | ignorieren | erlauben)",
       "/at botan | botaus    Selbstmodus von Hand schalten",
       "/at selfon <befehl>   Befehl zum Einschalten des Selbstmodus",
       "/at selfoff <befehl>  Befehl zum Ausschalten",
@@ -816,6 +817,9 @@ SlashCmdList["AUTOTRAVEL"] = function(input)
          AT.Set("GuardHeirlooms", AT.GetBool("GuardHeirlooms") and 0 or 1)
          AT.Print("Erbstueckschutz " .. (AT.GetBool("GuardHeirlooms") and "AN" or "AUS"))
       end
+
+   elseif cmd == "buffs" or cmd == "verbrauch" then
+      AT.Cons.Command(rest)
 
    elseif cmd == "botan" then AT.Bot.Enable()
    elseif cmd == "botaus" then AT.Bot.Disable()

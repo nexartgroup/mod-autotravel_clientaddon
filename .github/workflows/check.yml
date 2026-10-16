@@ -20,5 +20,7 @@ jobs:
           sudo apt-get install -y lua5.1 luarocks
           sudo luarocks install luacheck
 
+      # Ueber bash aufrufen: der Ausfuehrungsbit der Datei kann in Git verloren gehen (er fehlte
+      # nach einer Aenderung der Berechtigungen auf main: "Permission denied", Exit 126).
       - name: Pruefen
-        run: tests/check.sh
+        run: bash tests/check.sh

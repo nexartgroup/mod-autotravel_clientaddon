@@ -27,7 +27,7 @@ read_globals = {
    "UIDropDownMenu_SetSelectedValue", "UIDropDownMenu_SetWidth", "UIDropDownMenu_SetText",
    "ChatEdit_GetActiveWindow", "_G", "YES", "NO", "IsAddOnLoaded", "UnitOnTaxi", "UnitHasVehicleUI",
    -- Zeit, Einheiten, Eingabe
-   "GetTime", "UnitName", "UnitIsDeadOrGhost", "UnitAffectingCombat", "UnitCastingInfo",
+   "GetTime", "UnitName", "UnitExists", "UnitIsDeadOrGhost", "UnitAffectingCombat", "UnitCastingInfo",
    "UnitChannelInfo", "GetUnitSpeed", "IsFalling", "IsMouselooking", "IsMouseButtonDown",
    "IsShiftKeyDown", "IsControlKeyDown", "IsAltKeyDown", "GetCursorPosition",
    "CursorHasItem", "CursorHasSpell", "GetMouseFocus", "MouseIsOver",
@@ -41,7 +41,9 @@ read_globals = {
    "SetMapToCurrentZone", "SetMapByID", "GetPlayerMapPosition",
    -- Inventar
    "GetInventoryItemQuality", "GetInventoryItemLink", "GetContainerNumSlots",
-   "GetContainerItemLink",
+   "GetContainerItemLink", "GetContainerItemInfo", "GetItemInfo",
+   -- Buffs und Reittier (AT_Consumables.lua)
+   "UnitBuff", "IsMounted",
    -- Carbonite
    "Nx",
 }

@@ -35,6 +35,9 @@ M.world = {
    forms = {},                                    -- Gestalten { icon, name, active }
    spells = {},                                   -- GetSpellInfo: [id] = { name, icon }
    talents = { 0, 0, 0 },                         -- Punkte je Talentbaum
+   bags = {},                                     -- Taschen: bags[nr] = { size, [slot] = { id, count } }
+   auras = {},                                    -- Buffs des Spielers: { name, spellId, expires }
+   mounted = false,
 }
 
 -- ---------------------------------------------------------------------------
@@ -171,6 +174,87 @@ end
 
 function M.ClearSent() M.sent = {} end
 
+-- Taschen und Buffs fuer die Verbrauchsgueter ------------------------------------------------
+
+-- Ein Gegenstandslink, wie ihn GetContainerItemLink liefert
+function M.ItemLink(id)
+   return string.format("|cffffffff|Hitem:%d:0:0:0:0:0:0:0:0|h[Gegenstand %d]|h|r", id, id)
+end
+
+-- 'count' Stueck in die erste freie Stelle der Taschen legen (Rucksack 0 hat 16 Plaetze, 1-4 sind leer
+-- und werden bei Bedarf mit 16 Plaetzen angelegt). Liegt der Gegenstand schon dort, wird gestapelt.
+function M.Give(id, count)
+   count = count or 1
+   local W = M.world
+   for bag = 0, 4 do
+      local b = W.bags[bag]
+      if b then
+         for slot = 1, b.size do
+            if b[slot] and b[slot].id == id then
+               b[slot].count = b[slot].count + count
+               return bag, slot
+            end
+         end
+      end
+   end
+   for bag = 0, 4 do
+      W.bags[bag] = W.bags[bag] or { size = 16 }
+      local b = W.bags[bag]
+      for slot = 1, b.size do
+         if not b[slot] then
+            b[slot] = { id = id, count = count }
+            return bag, slot
+         end
+      end
+   end
+   error("Taschen voll")
+end
+
+-- Ein Stueck wegnehmen (wie nach dem Benutzen). Rueckgabe: true, wenn eines da war.
+function M.TakeOne(id)
+   local W = M.world
+   for bag = 0, 4 do
+      local b = W.bags[bag]
+      if b then
+         for slot = 1, b.size do
+            local it = b[slot]
+            if it and it.id == id then
+               it.count = it.count - 1
+               if it.count <= 0 then b[slot] = nil end
+               return true
+            end
+         end
+      end
+   end
+   return false
+end
+
+function M.CountOf(id)
+   local n = 0
+   for bag = 0, 4 do
+      local b = M.world.bags[bag]
+      if b then
+         for slot = 1, b.size do
+            if b[slot] and b[slot].id == id then n = n + b[slot].count end
+         end
+      end
+   end
+   return n
+end
+
+-- Einen Buff auf den Spieler legen (spellId nil: der Client liefert keine Zauberkennung)
+function M.AddAura(name, spellId, expires)
+   local W = M.world
+   W.auras[#W.auras + 1] = { name = name, spellId = spellId, expires = expires }
+end
+
+function M.RemoveAura(spellId)
+   local W = M.world
+   for i = #W.auras, 1, -1 do
+      if W.auras[i].spellId == spellId then table.remove(W.auras, i) end
+   end
+end
+
 function M.SentCommands()
    local out = {}
    for _, s in ipairs(M.sent) do out[#out + 1] = s.text end
@@ -205,6 +289,7 @@ function M.Install()
       focus = nil,
       class = "WARRIOR", level = 80,
       forms = {}, spells = {}, talents = { 0, 0, 0 },
+      bags = {}, auras = {}, mounted = false,
    }
 
    local W = M.world
@@ -308,8 +393,38 @@ function M.Install()
    -- Inventar
    _G.GetInventoryItemQuality = function() return nil end
    _G.GetInventoryItemLink = function() return nil end
-   _G.GetContainerNumSlots = function() return 0 end
-   _G.GetContainerItemLink = function() return nil end
+   _G.GetContainerNumSlots = function(bag)
+      local b = W.bags[bag]
+      return b and b.size or 0
+   end
+   _G.GetContainerItemLink = function(bag, slot)
+      local b = W.bags[bag]
+      local it = b and b[slot]
+      return it and M.ItemLink(it.id) or nil
+   end
+   -- 3.3.5a: texture, itemCount, locked, quality, readable
+   _G.GetContainerItemInfo = function(bag, slot)
+      local b = W.bags[bag]
+      local it = b and b[slot]
+      if not it then return nil end
+      return "Interface\\Icons\\INV_Misc_QuestionMark", it.count, false, 1, false
+   end
+   _G.GetItemInfo = function(id)
+      id = tonumber(id) or tonumber(tostring(id):match("item:(%d+)"))
+      if not id then return nil end
+      return "Gegenstand " .. id
+   end
+
+   -- Buffs: name, rank, icon, count, debuffType, duration, expirationTime, caster, isStealable,
+   -- shouldConsolidate, spellId (3.3.5a)
+   _G.UnitBuff = function(unit, i)
+      if unit ~= "player" then return nil end
+      local a = W.auras[i]
+      if not a then return nil end
+      return a.name, "", "Interface\\Icons\\Spell", 1, nil, a.duration or 1800, a.expires or (M.now + 1800),
+             "player", false, false, a.spellId
+   end
+   _G.IsMounted = function() return W.mounted end
 
    -- Aufrufe, die in der echten Umgebung nur unter dem UIDropDownMenu-System
    -- existieren (BotPad)

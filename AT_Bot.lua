@@ -7,10 +7,12 @@
 --   Playerbot   kaempft, heilt, lootet
 --
 -- Gesendet werden Strategiebefehle (co / nc / ll). Nie "ue", "roll", "s", "b",
--- "talents", "destroy". Einzige Ausnahme ist "e <Erbstueck>" aus AT_Gear.lua, das
--- ein vom Bot abgelegtes Erbstueck wieder anlegt. Die Strategie "new rpg" wird
--- in den festen Profilen aktiv abgeschaltet, weil sie Questen ausloest und
--- darueber Ausruestung wechseln kann.
+-- "talents", "destroy". Ausnahmen sind "e <Erbstueck>" aus AT_Gear.lua, das ein vom
+-- Bot abgelegtes Erbstueck wieder anlegt, "pet <Haltung>" (aggressive, defensive,
+-- passive), das nur die Reaktion des Begleiters umstellt, und "u <Gegenstand>" aus
+-- AT_Consumables.lua (Flaeschchen, Elixiere, Schriftrollen im Kampf). Die Strategie
+-- "new rpg" wird in den festen Profilen aktiv abgeschaltet, weil sie Questen ausloest
+-- und darueber Ausruestung wechseln kann.
 --
 -- Befehle gehen als Fluesternachricht an den eigenen Namen -- so erwartet es
 -- mod-playerbots fuer Einzelbots.
@@ -42,6 +44,7 @@ B.CombatFlags = {
    { "heal",            "Klassenstrategie Heilen (Druide: greift nicht an!)" },
    { "healer dps",      "Heiler zaubern Schaden bei genug Mana" },
    { "save mana",       "Heiler sparen Mana unter einem Schwellwert" },
+   { "potions",         "Heil- und Manatraenke aus dem Beutel benutzen: Gesundheitsstein oder Heiltrank bei kritischer Gesundheit, Manatrank bei wenig Mana (Standard des Servers: an)" },
    { "boost",           "grosse Abklingzeiten benutzen" },
    { "cc",              "Kontrolle benutzen (braucht rti-Ziel)" },
    { "threat",          "Schadensklassen meiden Bedrohung" },
@@ -62,7 +65,71 @@ B.NonCombatFlags = {
    { "grind",           "selbst Ziele suchen" },
    { "new rpg",         "questen (aendert Ausruestung!)" },
    { "pvp",             "PvP-Modus" },
+   { "maintenance",     "Wartung (Standard: aus): lernt Rezepte aus dem Beutel, verzaubert und entzaubert eigene Gegenstaende, benutzt Questgegenstaende, raeumt das Questlog auf und kann bei fast vollen Taschen Ueberfluessiges vernichten" },
 }
+
+-- Strategien, die der Server von sich aus einschaltet ("co !" / "nc !" liefert sie).
+-- Eigene Profile setzen jede Flagge ausdruecklich; fehlt eine in einem frueher gespeicherten
+-- Profil, gilt dort der Standard des Servers -- sonst wuerde ein neues "-potions" still
+-- abschalten, was bisher lief.
+B.FlagDefaults = { potions = true }
+
+-- Zustand einer Flagge in einem eigenen Profil (nicht gesetzt = Standard des Servers).
+function B.FlagState(map, flag)
+   local st = map and map[flag]
+   if st == nil then st = B.FlagDefaults[flag] end
+   return st and true or false
+end
+
+-- Haltung des Begleiters. Der Server kennt "pet aggressive|defensive|passive".
+B.PetStances = {
+   { "aggressive", "aggressiv" },
+   { "defensive",  "defensiv" },
+   { "passive",    "passiv" },
+}
+
+-- Gueltige Haltung oder nil (nicht gesetzt: der Begleiter bleibt, wie er ist).
+function B.ValidPet(v)
+   if type(v) ~= "string" then return nil end
+   for _, s in ipairs(B.PetStances) do
+      if s[1] == v then return v end
+   end
+   return nil
+end
+
+function B.PetLabel(v)
+   v = B.ValidPet(v)
+   for _, s in ipairs(B.PetStances) do
+      if s[1] == v then return s[2] end
+   end
+   return "unveraendert"
+end
+
+-- Verbrauchsgueter aus den Taschen (AT_Consumables.lua). Das ist KEINE Strategie des
+-- Servers, sondern eine Eigenschaft des Profils im Addon: der Bot kennt Schriftrollen,
+-- Elixiere und Flaeschchen nicht von sich aus, das Addon liest die Taschen und fluestert
+-- "u <Gegenstand>". Jede Art ist an oder aus; in den festen Profilen ist nichts gesetzt.
+B.ConsFlags = {
+   { "flask",  "Flaeschchen",   "Flaeschchen (Flask): belegen Kampf- und Waechterplatz und halten bis zu zwei Stunden." },
+   { "elixir", "Elixiere",      "Kampf- und Waechterelixiere: je ein Elixier pro Platz, solange kein Flaeschchen wirkt." },
+   { "scroll", "Schriftrollen", "Schriftrollen der Werte (Staerke, Beweglichkeit, Intelligenz, Ausdauer, Willenskraft, Schutz): je Wert die hoechste Stufe." },
+}
+
+-- Ist die Art in dieser Tabelle gesetzt? Nur ein ausdrueckliches true zaehlt.
+function B.ConsOn(map, flag)
+   return type(map) == "table" and map[flag] == true
+end
+
+-- Nur bekannte Arten, nur true: beschaedigte Eintraege (von Hand bearbeitete SavedVariables)
+-- fallen heraus.
+function B.CleanCons(map)
+   local out = {}
+   if type(map) ~= "table" then return out end
+   for _, f in ipairs(B.ConsFlags) do
+      if map[f[1]] == true then out[f[1]] = true end
+   end
+   return out
+end
 
 -- ---------------------------------------------------------------------------
 -- Feste Profile
@@ -222,6 +289,8 @@ function B.IsModified(key)
    if ox ~= dx then return true end
 
    if (tonumber(o.grace) or d.grace) ~= (d.grace or 2.0) then return true end
+   if B.ValidPet(o.pet) ~= B.ValidPet(d.pet) then return true end
+   if not SameFlags(B.CleanCons(o.cons), B.CleanCons(d.cons)) then return true end
    return false
 end
 
@@ -238,6 +307,8 @@ function B.BuiltinOverride(key)
          noncombat = B.ParseFlags(d.noncombat),
          extra     = table.concat(d.extra or {}, "; "),
          grace     = d.grace or 2.0,
+         pet       = d.pet,
+         cons      = B.CleanCons(d.cons),
       }
       g.builtin[key] = o
    end
@@ -245,6 +316,8 @@ function B.BuiltinOverride(key)
    if type(o.noncombat) ~= "table" then o.noncombat = {} end
    if type(o.extra) ~= "string" then o.extra = "" end
    if type(o.grace) ~= "number" then o.grace = d.grace or 2.0 end
+   o.pet = B.ValidPet(o.pet)
+   o.cons = B.CleanCons(o.cons)
    return o
 end
 
@@ -290,6 +363,8 @@ local function ResolveBuiltin(p)
    q.noncombat = B.FormatFlags(o.noncombat, B.BuiltinNonCombatFlags)
    q.extra     = SplitExtra(o.extra)
    q.grace     = tonumber(o.grace) or p.grace
+   q.pet       = B.ValidPet(o.pet)
+   q.cons      = B.CleanCons(o.cons)
    q.modified  = true
    return q
 end
@@ -312,6 +387,8 @@ function B.CustomSlot(i)
    if type(c.noncombat) ~= "table" then c.noncombat = {} end
    if type(c.extra) ~= "string" then c.extra = "" end
    if type(c.grace) ~= "number" then c.grace = 2.0 end
+   c.pet = B.ValidPet(c.pet)
+   c.cons = B.CleanCons(c.cons)
    return c
 end
 
@@ -320,6 +397,8 @@ function B.CustomUsed(i)
    local c = B.CustomSlot(i)
    if next(c.combat) ~= nil then return true end
    if next(c.noncombat) ~= nil then return true end
+   if c.pet ~= nil then return true end
+   if next(c.cons) ~= nil then return true end
    return c.extra ~= ""
 end
 
@@ -334,6 +413,8 @@ local function CustomProfile(i)
       customIndex = i,
       loot = loot,
       grace = c.grace or (loot and 7.0 or 2.0),
+      pet = c.pet,
+      cons = c.cons,
    }
 end
 
@@ -389,7 +470,9 @@ local function PruneRecent(now)
    recentCount = 0
 end
 
-function B.Whisper(text)
+-- onSent (optional) laeuft, wenn die Nachricht WIRKLICH hinausgeht -- die Warteschlange haelt
+-- sie unter Umstaenden zurueck. Wer ein Ergebnis abwarten will (AT_Consumables), misst ab dann.
+function B.Whisper(text, onSent)
    if not text or text == "" then return end
    local now = GetTime()
    recentCount = recentCount + 1
@@ -398,6 +481,7 @@ function B.Whisper(text)
    AT.Queue(function()
       SendChatMessage(text, "WHISPER", nil, UnitName("player"))
       AT.Debug("-> [Fluestern an sich] " .. text)
+      if onSent then onSent() end
    end, "bot")
 end
 
@@ -637,14 +721,14 @@ function B.ApplyProfile(formOnly)
 
       local cparts = {}
       for _, f in ipairs(B.CombatFlags) do
-         table.insert(cparts, (c.combat[f[1]] and "+" or "-") .. f[1])
+         table.insert(cparts, (B.FlagState(c.combat, f[1]) and "+" or "-") .. f[1])
       end
       SendFlagList("co", cparts)
 
       if not formOnly then
          local nparts = {}
          for _, f in ipairs(B.NonCombatFlags) do
-            table.insert(nparts, (c.noncombat[f[1]] and "+" or "-") .. f[1])
+            table.insert(nparts, (B.FlagState(c.noncombat, f[1]) and "+" or "-") .. f[1])
          end
          SendFlagList("nc", nparts)
 
@@ -665,6 +749,8 @@ function B.ApplyProfile(formOnly)
       end
    end
 
+   if not formOnly then B.ApplyPet(p) end
+
    -- Druide: Strategie der aktuellen Gestalt als letztes setzen, damit sie die
    -- Profilstrategien nicht verdraengen.
    B.formStrategy = B.DruidForm()
@@ -675,6 +761,35 @@ function B.ApplyProfile(formOnly)
    AT.SetSessionOption("grace", p.grace or 2.0)
    AT.Print("Profil: |cffffffff" .. p.name .. "|r - " .. p.desc)
 end
+
+-- Haltung des Begleiters (Jaeger, Hexenmeister, Todesritter, Magier, Priester ...). Der Befehl
+-- "pet <Haltung>" gilt fuer Begleiter und Waechter des Bots. Ohne Begleiter antwortet der Bot
+-- mit einer Fehlermeldung, deshalb wird nur gesendet, wenn einer da ist; ruft der Spieler ihn
+-- spaeter, zieht der Ereignisrahmen unten die Haltung nach.
+function B.ApplyPet(p)
+   p = p or B.Current()
+   local stance = p and B.ValidPet(p.pet)
+   if not stance then return false end
+   if not (UnitExists and UnitExists("pet")) then
+      AT.Debug("Kein Begleiter da - die Haltung '" .. stance .. "' wird gesendet, sobald er erscheint.")
+      return false
+   end
+   B.Whisper("pet " .. stance)
+   return true
+end
+
+local petFrame = CreateFrame("Frame")
+local petDue = 0
+petFrame:RegisterEvent("UNIT_PET")
+petFrame:SetScript("OnEvent", function(_, event, unit)
+   if unit == "player" then petDue = GetTime() + 1.0 end
+end)
+petFrame:SetScript("OnUpdate", function()
+   if petDue == 0 or GetTime() < petDue then return end
+   petDue = 0
+   if not B.IsRunning() or not AT.GetBool("BotControl") then return end
+   B.ApplyPet()
+end)
 
 -- Gestaltwechsel: kurz entprellen (beim Wechsel feuern mehrere Ereignisse), dann
 -- die Strategie nachziehen, wenn sie sich wirklich geaendert hat.

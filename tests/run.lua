@@ -2658,5 +2658,1024 @@ test("Gestaltwechsel bei Nicht-Druiden: Ereignis bleibt folgenlos", function()
    eq(#whispers(), 0, "nichts gesendet")
 end)
 
+-- ---------------------------------------------------------------------------
+-- 11.5: Traenke, Wartung, Haltung des Begleiters
+-- ---------------------------------------------------------------------------
+
+local function setPet(present)
+   _G.UnitExists = function(u)
+      if u == "pet" then return present and 1 or nil end
+      return 1
+   end
+end
+
+local function petWhispers()
+   local n = 0
+   for _, t in ipairs(whispers()) do if t:find("^pet ") then n = n + 1 end end
+   return n
+end
+
+test("neue Strategien: potions (Kampf) und maintenance (Nichtkampf) stehen in den Listen der Profile", function()
+   boot()
+   local B = AutoTravel.Bot
+   local function has(list, name)
+      for _, f in ipairs(list) do if f[1] == name then return true end end
+      return false
+   end
+   check(has(B.CombatFlags, "potions"), "potions im Kampf")
+   check(has(B.NonCombatFlags, "maintenance"), "maintenance ausserhalb des Kampfes")
+   check(has(B.BuiltinNonCombatFlags, "maintenance"), "...auch bei den festen Profilen")
+   check(has(B.BuiltinNonCombatFlags, "gather"), "gather bleibt bei den festen Profilen")
+   check(not has(B.NonCombatFlags, "gather"), "gather bleibt aus der Liste der eigenen Profile heraus")
+end)
+
+test("feste Profile setzen weder potions noch maintenance (keine stille Aenderung)", function()
+   boot()
+   local B = AutoTravel.Bot
+   for _, d in ipairs(B.Builtin) do
+      check(not d.combat:find("potions", 1, true), d.key .. ": potions nicht gesetzt")
+      check(not d.noncombat:find("maintenance", 1, true), d.key .. ": maintenance nicht gesetzt")
+      check(B.ValidPet(d.pet) == nil, d.key .. ": keine Haltung gesetzt")
+   end
+end)
+
+test("eigenes Profil: ohne Eintrag gilt potions als an und maintenance als aus (Standard des Servers)", function()
+   ready()
+   local B = AutoTravel.Bot
+   W.ServerLine("SelfBot is now active.")
+   local c = B.CustomSlot(1)
+   c.combat.dps = true                       -- ein frueher gespeichertes Profil kennt potions nicht
+   AutoTravel.Set("Profile", "custom1")
+   W.ClearSent()
+   B.ApplyProfile()
+   W.Advance(10)
+   local co, nc
+   for _, t in ipairs(whispers()) do
+      if t:find("^co %+") or t:find("^co %-") then co = (co or "") .. t .. "|" end
+      if t:find("^nc %+") or t:find("^nc %-") then nc = (nc or "") .. t .. "|" end
+   end
+   check(co and co:find("+potions", 1, true), "co setzt +potions: " .. tostring(co))
+   check(nc and nc:find("-maintenance", 1, true), "nc setzt -maintenance: " .. tostring(nc))
+   check(not (co and co:find("-potions", 1, true)), "kein -potions")
+end)
+
+test("eigenes Profil: potions abwaehlen speichert ausdruecklich false und sendet -potions", function()
+   ready()
+   local B = AutoTravel.Bot
+   W.ServerLine("SelfBot is now active.")
+   AutoTravel.ProfileEditor.Select("custom", 1)
+   local pot = flagBox("combat", "potions")
+   check(pot ~= nil, "Kaestchen vorhanden")
+   check(pot.__shown ~= false, "bei eigenen Profilen sichtbar")
+   check(pot:GetChecked() == true or pot:GetChecked() == 1, "ohne Eintrag angehakt (Standard: an)")
+   pot:SetChecked(false)
+   click(pot)
+   eq(B.CustomSlot(1).combat.potions, false, "abgewaehlt = ausdruecklich aus")
+   check(B.CustomUsed(1), "das Profil zaehlt als benutzt")
+   AutoTravel.Set("Profile", "custom1")
+   W.ClearSent()
+   B.ApplyProfile()
+   W.Advance(10)
+   check(anyWhisperMatches("-potions"), "-potions geht an den Bot")
+   pot:SetChecked(true)
+   click(pot)
+   eq(B.CustomSlot(1).combat.potions, true, "wieder angehakt = an")
+
+   -- eine andere Flagge ohne Standard bleibt bei nil, wenn sie abgewaehlt wird
+   local boost = flagBox("combat", "boost")
+   boost:SetChecked(true) click(boost)
+   boost:SetChecked(false) click(boost)
+   eq(B.CustomSlot(1).combat.boost, nil, "boost: abgewaehlt = nicht gesetzt, wie bisher")
+end)
+
+test("feste Profile: potions und maintenance lassen sich setzen und gehen an den Bot", function()
+   ready()
+   local B = AutoTravel.Bot
+   W.ServerLine("SelfBot is now active.")
+   AutoTravel.Set("Profile", "normal")
+   AutoTravel.ProfileEditor.Select("builtin", "normal")
+   local pot = flagBox("combat", "potions")
+   local mnt = flagBox("noncombat", "maintenance")
+   check(pot ~= nil and mnt ~= nil, "beide Kaestchen vorhanden")
+   click(pot)                                -- nicht gesetzt -> an
+   click(pot)                                -- an -> aus
+   eq(B.BuiltinOverride("normal").combat.potions, false, "potions aus")
+   click(mnt)                                -- nicht gesetzt -> an
+   eq(B.BuiltinOverride("normal").noncombat.maintenance, true, "maintenance an")
+   W.ClearSent()
+   B.ApplyProfile()
+   W.Advance(10)
+   check(anyWhisperMatches("-potions"), "-potions im co-Befehl")
+   check(anyWhisperMatches("+maintenance"), "+maintenance im nc-Befehl")
+   -- Zuruecksetzen entfernt beides wieder
+   AutoTravel.ProfileEditor.ResetSelected()
+   check(not B.Find("normal").combat:find("potions", 1, true), "potions nicht mehr gesetzt")
+   check(not B.Find("normal").noncombat:find("maintenance", 1, true), "maintenance nicht mehr gesetzt")
+end)
+
+test("Haltung des Begleiters: nur gueltige Werte, alles andere gilt als nicht gesetzt", function()
+   boot()
+   local B = AutoTravel.Bot
+   eq(B.ValidPet("aggressive"), "aggressive", "aggressive")
+   eq(B.ValidPet("defensive"), "defensive", "defensive")
+   eq(B.ValidPet("passive"), "passive", "passive")
+   eq(B.ValidPet("passive; destroy all"), nil, "angehaengter Befehl")
+   eq(B.ValidPet("attack"), nil, "attack ist keine Haltung")
+   eq(B.ValidPet(""), nil, "leer")
+   eq(B.ValidPet(5), nil, "keine Zeichenkette")
+   eq(B.ValidPet(nil), nil, "nil")
+   eq(B.PetLabel("passive"), "passiv", "Anzeige")
+   eq(B.PetLabel(nil), "unveraendert", "Anzeige ohne Wert")
+end)
+
+test("Haltung des Begleiters: feste Profile senden sie nur mit Begleiter und nur, wenn gesetzt", function()
+   ready()
+   local B = AutoTravel.Bot
+   W.ServerLine("SelfBot is now active.")
+   AutoTravel.Set("Profile", "normal")
+
+   setPet(true)
+   W.ClearSent()
+   B.ApplyProfile()
+   W.Advance(10)
+   eq(petWhispers(), 0, "kein Standardwert: nichts gesendet")
+
+   B.BuiltinOverride("normal").pet = "passive"
+   check(B.IsModified("normal"), "die Haltung zaehlt als Aenderung")
+   eq(B.Find("normal").pet, "passive", "wirksam")
+   W.ClearSent()
+   B.ApplyProfile()
+   W.Advance(10)
+   check(hasWhisper("pet passive"), "pet passive geht an den Bot")
+   eq(petWhispers(), 1, "genau einmal")
+
+   setPet(false)
+   W.ClearSent()
+   B.ApplyProfile()
+   W.Advance(10)
+   eq(petWhispers(), 0, "ohne Begleiter nichts (der Bot wuerde mit einer Fehlermeldung antworten)")
+
+   B.ResetBuiltin("normal")
+   eq(B.Find("normal").pet, nil, "Zuruecksetzen entfernt die Haltung")
+   check(not B.IsModified("normal"), "wieder Standard")
+
+   -- Die Formwechsel-Neuanwendung (nur Kampfstrategien) beruehrt den Begleiter nicht.
+   B.BuiltinOverride("normal").pet = "defensive"
+   setPet(true)
+   W.ClearSent()
+   B.ApplyProfile(true)
+   W.Advance(10)
+   eq(petWhispers(), 0, "ApplyProfile(true) sendet keine Haltung")
+   setPet(nil)
+end)
+
+test("Haltung des Begleiters: eigene Profile, auch ohne Strategien", function()
+   ready()
+   local B = AutoTravel.Bot
+   W.ServerLine("SelfBot is now active.")
+   check(not B.CustomUsed(2), "Platz 2 ist leer")
+   B.CustomSlot(2).pet = "aggressive"
+   check(B.CustomUsed(2), "eine Haltung allein macht das Profil benutzt")
+   eq(B.Find("custom2").pet, "aggressive", "im Profilobjekt")
+
+   setPet(true)
+   AutoTravel.Set("Profile", "custom2")
+   W.ClearSent()
+   B.ApplyProfile()
+   W.Advance(10)
+   check(hasWhisper("pet aggressive"), "pet aggressive geht an den Bot")
+
+   -- von Hand verdorbene Datei: kein fremder Befehl wird daraus
+   B.CustomSlot(2).pet = "aggressive; roll"
+   eq(B.CustomSlot(2).pet, nil, "ungueltige Haltung wird verworfen")
+   B.BuiltinOverride("normal").pet = "passive; destroy all"
+   eq(B.BuiltinOverride("normal").pet, nil, "...auch bei einem festen Profil")
+   setPet(nil)
+end)
+
+test("Haltung des Begleiters: ruft der Spieler den Begleiter spaeter, wird sie nachgezogen", function()
+   ready()
+   local B = AutoTravel.Bot
+   W.ServerLine("SelfBot is now active.")
+   W.Advance(5)
+   B.BuiltinOverride("normal").pet = "passive"
+   AutoTravel.Set("Profile", "normal")
+
+   setPet(false)
+   B.ApplyProfile()
+   W.Advance(10)
+   W.ClearSent()
+
+   setPet(true)
+   W.Fire("UNIT_PET", "player")
+   W.Advance(0.5)
+   eq(petWhispers(), 0, "entprellt: noch nichts")
+   W.Advance(3)
+   eq(petWhispers(), 1, "danach genau einmal")
+   check(hasWhisper("pet passive"), "pet passive")
+
+   -- fremde Einheit: folgenlos
+   W.ClearSent()
+   W.Fire("UNIT_PET", "party1")
+   W.Advance(5)
+   eq(petWhispers(), 0, "UNIT_PET einer anderen Einheit")
+
+   -- Bot aus: nichts
+   W.ServerLine("SelfBot is now deactivated.")
+   W.ClearSent()
+   W.Fire("UNIT_PET", "player")
+   W.Advance(5)
+   eq(petWhispers(), 0, "Bot laeuft nicht: nichts gesendet")
+
+   -- Steuerung aus: nichts
+   W.ServerLine("SelfBot is now active.")
+   AutoTravel.Set("BotControl", 0)
+   W.ClearSent()
+   W.Fire("UNIT_PET", "player")
+   W.Advance(5)
+   eq(petWhispers(), 0, "ohne Playerbot-Steuerung nichts gesendet")
+   setPet(nil)
+end)
+
+test("Editor: der Knopf fuer die Haltung wechselt durch alle Zustaende und markiert das Profil als geaendert", function()
+   ready()
+   local B = AutoTravel.Bot
+   AutoTravel.ProfileEditor.Select("builtin", "verteidigen")
+   local btn = AutoTravel.ProfileEditor.PetButton()
+   check(btn ~= nil, "Knopf vorhanden")
+   eq(btn.label:GetText(), "Haltung: unveraendert", "zunaechst unveraendert")
+   check(not B.HasOverride("verteidigen"), "Anzeigen legt nichts an")
+
+   click(btn)
+   eq(B.BuiltinOverride("verteidigen").pet, "aggressive", "1. Klick")
+   eq(btn.label:GetText(), "Haltung: aggressiv", "Anzeige aggressiv")
+   check(B.IsModified("verteidigen"), "geaendert")
+   click(btn)
+   eq(B.BuiltinOverride("verteidigen").pet, "defensive", "2. Klick")
+   eq(btn.label:GetText(), "Haltung: defensiv", "Anzeige defensiv")
+   click(btn)
+   eq(B.BuiltinOverride("verteidigen").pet, "passive", "3. Klick")
+   eq(btn.label:GetText(), "Haltung: passiv", "Anzeige passiv")
+   click(btn)
+   -- Vorsicht: BuiltinOverride() legt eine Ueberschreibung an, wenn es keine gibt; erst pruefen, dann lesen.
+   check(not B.HasOverride("verteidigen"), "4. Klick: die Ueberschreibung wird wieder entfernt")
+   eq(B.Find("verteidigen").pet, nil, "4. Klick: wieder unveraendert")
+   check(not B.IsModified("verteidigen"), "zurueck beim Standard")
+
+   -- eigenes Profil
+   AutoTravel.ProfileEditor.Select("custom", 3)
+   btn = AutoTravel.ProfileEditor.PetButton()
+   eq(btn.label:GetText(), "Haltung: unveraendert", "eigenes Profil: zunaechst unveraendert")
+   click(btn)
+   eq(B.CustomSlot(3).pet, "aggressive", "eigenes Profil: gesetzt")
+   click(btn) click(btn) click(btn)
+   eq(B.CustomSlot(3).pet, nil, "eigenes Profil: nach vier Klicks wieder nicht gesetzt")
+end)
+
+-- ---------------------------------------------------------------------------
+-- 11.6: Verbrauchsgueter (Flaeschchen, Elixiere, Schriftrollen) aus den Taschen
+-- ---------------------------------------------------------------------------
+
+-- Gegenstaende aus AT_ConsumableData.lua (Kennung -> Art, Zauber, Stufe):
+local ID = {
+   flaskRage       = 46377,   -- Flask of Endless Rage        Flaeschchen  Stufe 75
+   flaskFrost      = 46376,   -- Flask of the Frost Wyrm      Flaeschchen  Stufe 75
+   mongoose        = 13452,   -- Elixir of the Mongoose       Kampf        Stufe 46
+   mightyAgility   = 39666,   -- Elixir of Mighty Agility     Kampf        Stufe 70
+   mightyFort      = 40078,   -- Elixir of Mighty Fortitude   Waechter     Stufe 70
+   minorFort       = 2458,    -- Elixir of Minor Fortitude    Waechter     Stufe 2
+   agility1        = 3012,    -- Scroll of Agility            Stufe 1
+   agility4        = 10309,   -- Scroll of Agility IV         Stufe 40
+   agility7        = 43463,   -- Scroll of Agility VII        Stufe 70
+   strength8       = 43466,   -- Scroll of Strength VIII      Stufe 80
+   recall          = 37118,   -- Scroll of Recall             nicht in der Tabelle
+   waterBreathing  = 5996,    -- Elixir of Water Breathing    nicht in der Tabelle
+}
+
+local function spellOf(id) return AutoTravel.ConsData[id][2] end
+
+local function useWhispers()
+   local out = {}
+   for _, t in ipairs(whispers()) do if t:find("^u ") then out[#out + 1] = t end end
+   return out
+end
+
+local function idOf(text) return tonumber(tostring(text):match("Hitem:(%d+):")) end
+
+-- Der Server fuehrt den Befehl aus: ein Stueck weniger, und der Buff liegt auf dem Spieler.
+local function serverUses(id, withAura)
+   W.TakeOne(id)
+   if withAura ~= false then W.AddAura("Buff " .. spellOf(id), spellOf(id)) end
+end
+
+-- Warten, bis ein weiterer "u"-Befehl hinausgeht. Rueckgabe: die Kennung des Gegenstands (oder nil).
+local function awaitUse(maxSeconds)
+   local before = #useWhispers()
+   local waited = 0
+   while waited < (maxSeconds or 10) do
+      W.Advance(0.1)
+      waited = waited + 0.1
+      local now = useWhispers()
+      if #now > before then return idOf(now[#now]), now[#now] end
+   end
+   return nil
+end
+
+-- Ein Charakter im Selbstmodus mit einem eigenen Profil, das die Arten erlaubt.
+local function consBoot(flags)
+   ready()
+   local B = AutoTravel.Bot
+   W.ServerLine("SelfBot is now active.")
+   W.world.level = 80
+   local c = B.CustomSlot(1)
+   c.cons = flags or {}
+   c.combat.dps = true                       -- ein Eintrag, damit das Profil als benutzt zaehlt
+   AutoTravel.Set("Profile", "custom1")
+   W.ClearSent()
+   return B, AutoTravel.Cons
+end
+
+local ALL = function() return { flask = true, elixir = true, scroll = true } end
+
+local function startFight()
+   W.world.combat = true
+   W.Fire("PLAYER_REGEN_DISABLED")
+end
+
+-- Reine Auswahl ---------------------------------------------------------------------------
+
+local function stockOf(list)
+   local st = {}
+   for id, count in pairs(list) do
+      st[id] = { id = id, link = W.ItemLink(id), count = count, d = AutoTravel.ConsData[id] }
+   end
+   return st
+end
+
+local function aurasOf(spells, noIds)
+   local a = { ids = {}, names = {}, hasIds = not noIds }
+   for _, sp in ipairs(spells or {}) do
+      if not noIds then a.ids[sp] = true end
+      a.names["Buff " .. sp] = true
+   end
+   return a
+end
+
+local function newState() return { slot = {}, item = {}, uses = {}, warned = {} } end
+
+local function decide(list, spells, wanted, extra)
+   extra = extra or {}
+   return AutoTravel.Cons.Decide(stockOf(list), aurasOf(spells), {
+      level = extra.level or 80, wanted = wanted, ignore = extra.ignore or {},
+      state = extra.state or newState(), now = extra.now or 1000,
+   })
+end
+
+test("Verbrauchsgueter: die Tabelle kennt Faeschchen, Elixiere und Schriftrollen, aber keine Hilfsmittel", function()
+   boot()
+   local D = AutoTravel.ConsData
+   check(type(D) == "table", "Tabelle geladen")
+   local kinds = {}
+   for id, d in pairs(D) do
+      kinds[d[1]] = (kinds[d[1]] or 0) + 1
+      check(d[1] == "flask" or d[1] == "battle" or d[1] == "guardian" or d[1] == "scroll", "Art von " .. id)
+      check(type(d[2]) == "number" and d[2] > 0, "Zauber von " .. id)
+      check(type(d[3]) == "number" and type(d[4]) == "number", "Stufen von " .. id)
+      if d[1] == "scroll" then
+         check(type(d[5]) == "string" and type(d[6]) == "number", "Wert und Rang der Schriftrolle " .. id)
+      end
+   end
+   check((kinds.flask or 0) >= 30 and (kinds.battle or 0) >= 30 and (kinds.guardian or 0) >= 20
+         and (kinds.scroll or 0) >= 40, "von jeder Art genug Eintraege")
+   eq(D[ID.flaskRage][1], "flask", "Flask of Endless Rage")
+   eq(D[ID.mongoose][1], "battle", "Elixir of the Mongoose")
+   eq(D[ID.mightyFort][1], "guardian", "Elixir of Mighty Fortitude")
+   eq(D[ID.agility7][5], "agility", "Wert der Schriftrolle")
+   eq(D[ID.agility7][6], 7, "Rang der Schriftrolle")
+   check(D[ID.recall] == nil, "Scroll of Recall (Teleport) fehlt")
+   check(D[ID.waterBreathing] == nil, "Wasseratmung fehlt")
+   check(D[8827] == nil, "Wasserwandeln fehlt")
+   check(D[9154] == nil, "Untote erkennen fehlt")
+end)
+
+test("Verbrauchsgueter: feste Profile erlauben nichts und bleiben unveraendert", function()
+   boot()
+   local B = AutoTravel.Bot
+   for _, d in ipairs(B.Builtin) do
+      check(d.cons == nil, d.key .. ": Standard ohne Verbrauchsgueter")
+      check(not B.IsModified(d.key), d.key .. ": unveraendert")
+   end
+   AutoTravel.Set("Profile", "plus")
+   local w = AutoTravel.Cons.Wanted()
+   check(not w.flask and not w.elixir and not w.scroll, "Plus erlaubt nichts")
+end)
+
+test("Verbrauchsgueter: beschaedigte Eintraege der gespeicherten Profile fallen heraus", function()
+   boot()
+   local B = AutoTravel.Bot
+   B.Global().custom[1] = { name = "X", combat = {}, noncombat = {}, extra = "", grace = 2,
+                            cons = { flask = "ja", elixir = true, bogus = true, scroll = 1 } }
+   local c = B.CustomSlot(1)
+   eq(c.cons.elixir, true, "elixir bleibt")
+   eq(c.cons.flask, nil, "flask = \"ja\" ist kein true")
+   eq(c.cons.scroll, nil, "scroll = 1 ist kein true")
+   eq(c.cons.bogus, nil, "unbekannte Art faellt heraus")
+   B.Global().custom[2] = { cons = "kaputt" }
+   check(type(B.CustomSlot(2).cons) == "table", "keine Tabelle: neu angelegt")
+end)
+
+test("Editor: Verbrauchsgueter in festen Profilen haben zwei Zustaende; das Profil gilt als geaendert und kehrt zurueck", function()
+   ready()
+   local B = AutoTravel.Bot
+   AutoTravel.ProfileEditor.Select("builtin", "plus")
+   local fl = flagBox("cons", "flask")
+   check(fl ~= nil, "Kaestchen vorhanden")
+   check(fl.text:GetText():find("Flaeschchen", 1, true), "Anzeigename statt Schluessel")
+   check(not B.HasOverride("plus"), "Anzeigen legt nichts an")
+
+   click(fl)
+   eq(B.BuiltinOverride("plus").cons.flask, true, "1. Klick: an")
+   check(B.IsModified("plus"), "geaendert")
+   check(fl.text:GetText():find("+", 1, true), "Anzeige: +")
+   AutoTravel.Set("Profile", "plus")
+   local w = AutoTravel.Cons.Wanted()
+   check(w.flask and not w.elixir and not w.scroll, "nur Flaeschchen erlaubt")
+
+   click(fl)
+   check(not B.HasOverride("plus"), "2. Klick: aus - die Ueberschreibung ist weg (kein 'ausdruecklich aus')")
+   check(not B.IsModified("plus"), "wieder der Standard")
+   check(not AutoTravel.Cons.Wanted().flask, "nichts erlaubt")
+end)
+
+test("Editor: eigenes Profil: Haken setzt true, Abwaehlen entfernt, das Profil zaehlt als benutzt", function()
+   ready()
+   local B = AutoTravel.Bot
+   AutoTravel.ProfileEditor.Select("custom", 2)
+   local el = flagBox("cons", "elixir")
+   check(el ~= nil and el.__shown ~= false, "Kaestchen sichtbar")
+   check(not B.CustomUsed(2), "zunaechst leer")
+   el:SetChecked(true) click(el)
+   eq(B.CustomSlot(2).cons.elixir, true, "angehakt")
+   check(B.CustomUsed(2), "zaehlt als benutzt")
+   AutoTravel.Set("Profile", "custom2")
+   check(AutoTravel.Cons.Wanted().elixir, "das Profil erlaubt Elixiere")
+   el:SetChecked(false) click(el)
+   eq(B.CustomSlot(2).cons.elixir, nil, "abgewaehlt: nicht gesetzt")
+   check(not B.CustomUsed(2), "wieder leer")
+end)
+
+test("Editor: die Verbrauchsgueter erscheinen nicht als Strategie beim Bot", function()
+   ready()
+   local B = AutoTravel.Bot
+   W.ServerLine("SelfBot is now active.")
+   B.CustomSlot(1).cons = ALL()
+   B.CustomSlot(1).combat.dps = true
+   AutoTravel.Set("Profile", "custom1")
+   W.ClearSent()
+   B.ApplyProfile()
+   W.Advance(10)
+   for _, t in ipairs(whispers()) do
+      check(not t:find("flask", 1, true) and not t:find("elixir", 1, true) and not t:find("scroll", 1, true),
+            "kein Verbrauchsgut in " .. t)
+   end
+end)
+
+test("B.Whisper: der Rueckruf laeuft erst, wenn die Nachricht hinausgeht", function()
+   ready()
+   local B = AutoTravel.Bot
+   local sent = false
+   B.Whisper("pruefen", function() sent = true end)
+   check(not sent, "noch nicht gesendet")
+   W.Advance(1.0)
+   check(sent, "nach dem Senden")
+   check(hasWhisper("pruefen"), "die Nachricht ging hinaus")
+end)
+
+test("Auswahl: ohne Erlaubnis nichts, mit Erlaubnis die richtige Art", function()
+   boot()
+   local list = { [ID.flaskRage] = 1, [ID.mongoose] = 1, [ID.agility7] = 1 }
+   eq(decide(list, {}, { flask = false, elixir = false, scroll = false }), nil, "nichts erlaubt")
+   eq((decide(list, {}, { flask = true })).id, ID.flaskRage, "nur Flaeschchen")
+   eq((decide(list, {}, { elixir = true })).id, ID.mongoose, "nur Elixiere")
+   eq((decide(list, {}, { scroll = true })).id, ID.agility7, "nur Schriftrollen")
+end)
+
+test("Auswahl: ein wirkender Buff erledigt seinen Platz", function()
+   boot()
+   local list = { [ID.mongoose] = 1, [ID.mightyFort] = 1, [ID.agility7] = 1 }
+   local all = ALL()
+   local e, key = decide(list, {}, all)
+   eq(e.id, ID.mongoose, "zuerst das Kampfelixier") eq(key, "battle", "Platz battle")
+   e = decide(list, { spellOf(ID.mongoose) }, all)
+   eq(e.id, ID.mightyFort, "danach das Waechterelixier")
+   e = decide(list, { spellOf(ID.mongoose), spellOf(ID.mightyFort) }, all)
+   eq(e.id, ID.agility7, "danach die Schriftrolle")
+   e = decide(list, { spellOf(ID.mongoose), spellOf(ID.mightyFort), spellOf(ID.agility7) }, all)
+   eq(e, nil, "alles wirkt: nichts zu tun")
+end)
+
+test("Auswahl: Kampf- und Waechterplatz sind unabhaengig voneinander", function()
+   boot()
+   local list = { [ID.mongoose] = 1, [ID.mightyFort] = 1 }
+   local el = { elixir = true }
+   -- nur ein Waechterelixier wirkt: das Kampfelixier ist trotzdem faellig
+   local e, key = decide(list, { spellOf(ID.mightyFort) }, el)
+   eq(e and e.id, ID.mongoose, "Waechterplatz belegt, Kampfplatz frei: Kampfelixier") eq(key, "battle", "Platz battle")
+   -- nur ein Kampfelixier wirkt: das Waechterelixier ist faellig
+   e, key = decide(list, { spellOf(ID.mongoose) }, el)
+   eq(e and e.id, ID.mightyFort, "Kampfplatz belegt, Waechterplatz frei: Waechterelixier") eq(key, "guardian", "Platz guardian")
+   -- beide belegt
+   eq(decide(list, { spellOf(ID.mongoose), spellOf(ID.mightyFort) }, el), nil, "beide belegt: nichts")
+   -- ein Waechterelixier im Beutel, das Kampfelixier fehlt: nur das Waechterelixier
+   e = decide({ [ID.mightyFort] = 1 }, {}, el)
+   eq(e and e.id, ID.mightyFort, "nur ein Waechterelixier vorhanden")
+end)
+
+test("Auswahl: ein Flaeschchen belegt beide Plaetze und wird nicht durch Elixiere ersetzt", function()
+   boot()
+   local list = { [ID.flaskRage] = 2, [ID.mongoose] = 1, [ID.mightyFort] = 1 }
+   local all = ALL()
+   local e = decide(list, {}, all)
+   eq(e.id, ID.flaskRage, "ohne Buff zuerst das Flaeschchen")
+   eq(decide(list, { spellOf(ID.flaskRage) }, all), nil, "wirkt das Flaeschchen, bleiben die Elixiere liegen")
+   -- ein anderes Flaeschchen wirkt ebenso
+   eq(decide(list, { spellOf(ID.flaskFrost) }, all), nil, "ein anderes Flaeschchen zaehlt auch")
+   -- ein wirkendes Kampfelixier: das Flaeschchen wuerde es ersetzen
+   e = decide(list, { spellOf(ID.mongoose) }, all)
+   check(e == nil or e.id ~= ID.flaskRage, "ein Elixier wird nicht durch das Flaeschchen ersetzt")
+   eq(e and e.id, ID.mightyFort, "stattdessen der freie Waechterplatz")
+   -- Flaeschchen nicht erlaubt: die Elixiere kommen dran
+   e = decide(list, {}, { elixir = true })
+   eq(e.id, ID.mongoose, "ohne Flaeschchen-Erlaubnis das Elixier")
+end)
+
+test("Auswahl: von mehreren Gegenstaenden eines Platzes der hoechste, den der Charakter tragen darf", function()
+   boot()
+   local list = { [ID.agility1] = 1, [ID.agility4] = 1, [ID.agility7] = 1 }
+   eq((decide(list, {}, { scroll = true }, { level = 80 })).id, ID.agility7, "Stufe 80: Rang 7")
+   eq((decide(list, {}, { scroll = true }, { level = 69 })).id, ID.agility4, "Stufe 69: Rang 4 (Rang 7 braucht 70)")
+   eq((decide(list, {}, { scroll = true }, { level = 39 })).id, ID.agility1, "Stufe 39: Rang 1")
+   local e = decide({ [ID.agility7] = 1 }, {}, { scroll = true }, { level = 30 })
+   eq(e, nil, "kein tragbarer Gegenstand: nichts")
+   -- jede Stufe des Werts erledigt ihn
+   eq(decide(list, { spellOf(ID.agility4) }, { scroll = true }), nil, "eine niedrigere Stufe wirkt: erledigt")
+   -- Elixiere
+   local el = { [ID.mongoose] = 1, [ID.mightyAgility] = 1 }
+   eq((decide(el, {}, { elixir = true })).id, ID.mightyAgility, "das hoehere Kampfelixier")
+   eq((decide(el, {}, { elixir = true }, { level = 50 })).id, ID.mongoose, "Stufe 50: das niedrigere")
+end)
+
+test("Auswahl: Ausschlussliste, Sperre und Mindestabstand", function()
+   boot()
+   local list = { [ID.mongoose] = 1, [ID.mightyAgility] = 1 }
+   local el = { elixir = true }
+   eq((decide(list, {}, el, { ignore = { [ID.mightyAgility] = true } })).id, ID.mongoose, "ausgeschlossen: das andere")
+   eq(decide(list, {}, el, { ignore = { [ID.mightyAgility] = true, [ID.mongoose] = true } }), nil, "beide ausgeschlossen")
+
+   local st = newState()
+   st.item[ID.mightyAgility] = { tries = 0, blockedUntil = 1500 }
+   eq((decide(list, {}, el, { state = st, now = 1000 })).id, ID.mongoose, "gesperrt: das andere")
+   eq((decide(list, {}, el, { state = st, now = 1600 })).id, ID.mightyAgility, "Sperre abgelaufen")
+
+   -- Mindestabstand je Platz
+   st = newState()
+   st.slot.battle = { lastUse = 1000, verified = true }
+   eq(decide(list, {}, el, { state = st, now = 1030 }), nil, "30 s nach einer Benutzung (Buff gesehen): noch nicht")
+   check(decide(list, {}, el, { state = st, now = 1046 }) ~= nil, "nach 45 s wieder")
+   st.slot.battle = { lastUse = 1000, verified = false }
+   eq(decide(list, {}, el, { state = st, now = 1500 }), nil, "Buff nie gesehen: 10 Minuten Pause")
+   check(decide(list, {}, el, { state = st, now = 1601 }) ~= nil, "nach 10 Minuten wieder")
+end)
+
+test("Auswahl: ohne Zauberkennung des Clients gilt der Name, mit ihr nur die Kennung", function()
+   boot()
+   W.world.spells[spellOf(ID.mongoose)] = { "Buff " .. spellOf(ID.mongoose), "icon" }
+   local list = { [ID.mongoose] = 1 }
+   local stock = stockOf(list)
+   local o = { level = 80, wanted = { elixir = true }, ignore = {}, state = newState(), now = 1000 }
+   -- Name da, aber der Client liefert Kennungen: ein gleichnamiger fremder Buff zaehlt nicht
+   local a = { ids = { [99999] = true }, names = { ["Buff " .. spellOf(ID.mongoose)] = true }, hasIds = true }
+   check(AutoTravel.Cons.Decide(stock, a, o) ~= nil, "mit Kennungen: der Name allein genuegt nicht")
+   -- ohne Kennungen: der Name genuegt
+   a = { ids = {}, names = { ["Buff " .. spellOf(ID.mongoose)] = true }, hasIds = false }
+   eq(AutoTravel.Cons.Decide(stock, a, o), nil, "ohne Kennungen: der Name zaehlt")
+end)
+
+-- Im Spiel -----------------------------------------------------------------------------------
+
+test("Im Kampf: das Addon fluestert 'u <Link>', prueft das Ergebnis und macht mit dem naechsten Platz weiter", function()
+   local B = consBoot(ALL())
+   W.Give(ID.mongoose, 2)
+   W.Give(ID.mightyFort, 1)
+   W.Give(ID.agility7, 3)
+   startFight()
+
+   local id, text = awaitUse(5)
+   eq(id, ID.mongoose, "zuerst das Kampfelixier")
+   eq(text, "u " .. W.ItemLink(ID.mongoose), "der Befehl ist 'u' und der Link des Gegenstands")
+   check(B.IsOwnCommand(text), "das Echo des Befehls wird verborgen")
+   eq(#useWhispers(), 1, "genau ein Befehl")
+
+   serverUses(ID.mongoose)
+   id = awaitUse(10)
+   eq(id, ID.mightyFort, "danach das Waechterelixier (nach dem Abstand von 3,5 s)")
+   serverUses(ID.mightyFort)
+   id = awaitUse(10)
+   eq(id, ID.agility7, "danach die Schriftrolle")
+   serverUses(ID.agility7)
+   id = awaitUse(10)
+   eq(id, nil, "alle Buffs wirken: nichts mehr")
+   eq(#useWhispers(), 3, "insgesamt drei Befehle")
+   eq(W.CountOf(ID.mongoose), 1, "ein Elixier blieb uebrig")
+   eq(AutoTravel.Cons.state.total, 3, "drei gelungene Benutzungen gezaehlt")
+end)
+
+test("Im Kampf: nur im Kampf, nur im Selbstmodus, nur mit Erlaubnis des Profils", function()
+   local B = consBoot(ALL())
+   W.Give(ID.mongoose, 1)
+   -- ausserhalb des Kampfes
+   W.Advance(10)
+   eq(#useWhispers(), 0, "ausserhalb des Kampfes nichts")
+
+   -- Selbstmodus aus
+   W.ServerLine("SelfBot is now deactivated.")
+   startFight()
+   W.Advance(10)
+   eq(#useWhispers(), 0, "ohne Selbstmodus nichts")
+   W.ServerLine("SelfBot is now active.")
+
+   -- Profil erlaubt nichts
+   B.CustomSlot(1).cons = {}
+   W.Advance(10)
+   eq(#useWhispers(), 0, "ohne Erlaubnis des Profils nichts")
+
+   -- Playerbot-Steuerung aus
+   B.CustomSlot(1).cons = ALL()
+   AutoTravel.Set("BotControl", 0)
+   W.Advance(10)
+   eq(#useWhispers(), 0, "mit ausgeschalteter Steuerung nichts")
+   AutoTravel.Set("BotControl", 1)
+
+   -- jetzt sind alle Voraussetzungen da
+   eq(awaitUse(5), ID.mongoose, "mit allen Voraussetzungen: der Befehl geht hinaus")
+end)
+
+test("Im Kampf: nur die Arten, die das Profil erlaubt", function()
+   consBoot({ scroll = true })
+   W.Give(ID.flaskRage, 1)
+   W.Give(ID.mongoose, 1)
+   W.Give(ID.agility7, 1)
+   startFight()
+   local id = awaitUse(5)
+   eq(id, ID.agility7, "nur die Schriftrolle")
+   serverUses(ID.agility7)
+   eq(awaitUse(10), nil, "weder Flaeschchen noch Elixier")
+end)
+
+test("Im Kampf: ein Flaeschchen vor den Elixieren, und ein wirkendes Flaeschchen laesst die Elixiere liegen", function()
+   consBoot({ flask = true, elixir = true })
+   W.Give(ID.flaskRage, 2)
+   W.Give(ID.mongoose, 1)
+   W.Give(ID.mightyFort, 1)
+   startFight()
+   eq(awaitUse(5), ID.flaskRage, "zuerst das Flaeschchen")
+   serverUses(ID.flaskRage)
+   eq(awaitUse(20), nil, "danach kein Elixier: das Flaeschchen belegt beide Plaetze")
+   eq(W.CountOf(ID.mongoose), 1, "das Elixier ist unberuehrt")
+end)
+
+test("Im Kampf: ist der Buff abgelaufen, kommt der naechste Gegenstand derselben Art dran", function()
+   consBoot({ scroll = true })
+   W.Give(ID.agility7, 3)
+   startFight()
+   eq(awaitUse(5), ID.agility7, "erste Schriftrolle")
+   serverUses(ID.agility7)
+   W.Advance(10)
+   eq(#useWhispers(), 1, "solange der Buff wirkt, keine zweite")
+   eq(W.CountOf(ID.agility7), 2, "zwei uebrig")
+
+   -- der Buff laeuft aus (30 Minuten spaeter): die naechste kommt im Kampf
+   W.RemoveAura(spellOf(ID.agility7))
+   local id = awaitUse(60)
+   eq(id, ID.agility7, "zweite Schriftrolle")
+   serverUses(ID.agility7)
+   W.Advance(20)
+   eq(W.CountOf(ID.agility7), 1, "eine uebrig")
+   eq(#useWhispers(), 2, "zwei Befehle insgesamt")
+end)
+
+test("Im Kampf: verschwindet der Buff gleich nach der Benutzung, gilt der Mindestabstand (keine Schleife)", function()
+   consBoot({ scroll = true })
+   W.Give(ID.agility7, 5)
+   startFight()
+   eq(awaitUse(5), ID.agility7, "erste")
+   local t1 = W.now
+   serverUses(ID.agility7)
+   W.Advance(3)
+   W.RemoveAura(spellOf(ID.agility7))              -- etwa von einem staerkeren Buff ersetzt
+   W.Advance(30)
+   eq(#useWhispers(), 1, "30 s lang keine zweite Benutzung")
+   eq(awaitUse(30), ID.agility7, "danach wieder")
+   local gap = W.now - t1
+   check(gap >= 45 and gap < 52, "nach rund 45 s, nicht frueher: " .. gap)
+end)
+
+test("Im Kampf: ohne Wirkung wird mehrfach versucht, dann der Gegenstand gesperrt und der naechste genommen", function()
+   consBoot({ elixir = true })
+   W.Give(ID.mightyAgility, 1)
+   W.Give(ID.mongoose, 1)
+   startFight()
+
+   local first = awaitUse(5)
+   eq(first, ID.mightyAgility, "der hoehere zuerst")
+   -- der Server tut nichts: es gibt weder weniger Stuecke noch einen Buff
+   local tries = 1
+   for _ = 1, 40 do
+      local id = awaitUse(12)
+      if not id then break end
+      if id == ID.mightyAgility then tries = tries + 1 else
+         eq(id, ID.mongoose, "nach der Sperre das niedrigere Elixier")
+         break
+      end
+   end
+   eq(tries, 5, "fuenf Versuche, dann im Kampf nicht mehr")
+   local warned = false
+   for _, m in ipairs(W.messages) do if m:find("liess sich im Kampf nicht benutzen", 1, true) then warned = true end end
+   check(warned, "der Spieler erfaehrt, dass es nach dem Kampf versucht wird")
+   eq(W.CountOf(ID.mightyAgility), 1, "nichts wurde verbraucht")
+   check(AutoTravel.Cons.state.peace[ID.mightyAgility] == true, "als 'nur nach dem Kampf' gemerkt")
+end)
+
+local function endFight()
+   W.world.combat = false
+   W.Fire("PLAYER_REGEN_ENABLED")
+end
+
+test("Nach dem Kampf: was im Kampf nicht ging, wird danach nachgeholt und im Kampf nicht mehr versucht", function()
+   consBoot({ elixir = true })
+   W.Give(ID.mongoose, 3)
+   startFight()
+   for _ = 1, 5 do awaitUse(12) end
+   eq(#useWhispers(), 5, "fuenf Versuche im Kampf")
+   W.Advance(40)
+   eq(#useWhispers(), 5, "danach im Kampf nichts mehr")
+
+   endFight()
+   local id = awaitUse(5)
+   eq(id, ID.mongoose, "nach dem Kampf geht der Befehl hinaus")
+   serverUses(ID.mongoose)                          -- jetzt klappt es
+   W.Advance(10)
+   eq(AutoTravel.Cons.state.total, 1, "gelungen")
+
+   -- der Buff laeuft aus; im naechsten Kampf wird der Gegenstand nicht mehr versucht
+   W.RemoveAura(spellOf(ID.mongoose))
+   W.Advance(60)
+   local n = #useWhispers()
+   startFight()
+   W.Advance(30)
+   eq(#useWhispers(), n, "im Kampf nicht, denn dort ging es nicht")
+   endFight()
+   check(awaitUse(5) == ID.mongoose, "nach dem Kampf wieder")
+end)
+
+test("Nach dem Kampf: das Zeitfenster ist begrenzt, und ein erneuter Fehlschlag sperrt den Gegenstand", function()
+   consBoot({ elixir = true })
+   W.Give(ID.mongoose, 2)
+   AutoTravel.Cons.state.peace[ID.mongoose] = true  -- im Kampf ging es nicht
+   startFight()
+   W.Advance(20)
+   eq(#useWhispers(), 0, "im Kampf nichts")
+
+   endFight()
+   W.Advance(30)                                    -- das Fenster von 25 s verstreicht ohne Befehl? nein: es wird versucht
+   local n = #useWhispers()
+   check(n >= 1 and n <= 7, "im Fenster wird versucht, aber nicht ewig: " .. n)
+   local warned = false
+   for _, m in ipairs(W.messages) do if m:find("Pause: 90 s", 1, true) then warned = true end end
+   check(warned, "nach fuenf Fehlschlaegen auch danach: gesperrt")
+   W.Advance(100)
+   eq(#useWhispers(), n, "ausserhalb des Fensters nichts mehr")
+end)
+
+test("Nach dem Kampf: nur das Nachzuholende, nichts anderes", function()
+   consBoot({ elixir = true, scroll = true })
+   W.Give(ID.mongoose, 1)
+   AutoTravel.Cons.state.peace[ID.mongoose] = true  -- im Kampf ging es nicht
+   startFight()
+   W.Advance(10)
+   eq(#useWhispers(), 0, "im Kampf nichts: das Elixier geht dort nicht")
+   endFight()
+   W.Give(ID.strength8, 1)                          -- liegt erst jetzt in den Taschen
+   eq(awaitUse(5), ID.mongoose, "nach dem Kampf das Nachzuholende")
+   serverUses(ID.mongoose)
+   W.Advance(15)
+   eq(#useWhispers(), 1, "die Schriftrolle wartet auf den naechsten Kampf")
+   startFight()
+   eq(awaitUse(5), ID.strength8, "im naechsten Kampf kommt sie dran")
+end)
+
+test("Nach dem Kampf: ohne Gegenstaende, die im Kampf nicht gingen, geschieht nichts", function()
+   consBoot({ elixir = true, scroll = true })
+   W.Give(ID.mongoose, 1)
+   startFight()
+   eq(awaitUse(5), ID.mongoose, "im Kampf versucht")
+   serverUses(ID.mongoose)
+   W.Advance(10)
+   endFight()
+   W.RemoveAura(spellOf(ID.mongoose))
+   W.Give(ID.agility7, 1)
+   W.Advance(60)
+   eq(#useWhispers(), 1, "nach dem Kampf wird nichts Neues begonnen")
+end)
+
+test("Im Kampf: verbraucht, aber kein Buff zu sehen: einmal warnen und zehn Minuten Pause", function()
+   consBoot({ scroll = true })
+   W.Give(ID.agility7, 4)
+   startFight()
+   eq(awaitUse(5), ID.agility7, "erste")
+   local t1 = W.now
+   serverUses(ID.agility7, false)                   -- verbraucht, aber kein Buff
+   W.Advance(10)
+   local warnings = 0
+   for _, m in ipairs(W.messages) do if m:find("Buff ist nicht zu sehen", 1, true) then warnings = warnings + 1 end end
+   eq(warnings, 1, "eine Warnung")
+   W.Advance(300)
+   eq(#useWhispers(), 1, "fuenf Minuten spaeter noch nichts")
+   eq(awaitUse(400), ID.agility7, "danach wieder")
+   local gap = W.now - t1
+   check(gap >= 600 and gap < 610, "nach zehn Minuten, nicht frueher: " .. gap)
+   warnings = 0
+   for _, m in ipairs(W.messages) do if m:find("Buff ist nicht zu sehen", 1, true) then warnings = warnings + 1 end end
+   eq(warnings, 1, "die Warnung kam nur einmal")
+end)
+
+test("Im Kampf: ein Flaeschchen ohne sichtbaren Buff laesst die Elixiere zehn Minuten in Ruhe", function()
+   consBoot({ flask = true, elixir = true })
+   W.Give(ID.flaskRage, 1)
+   W.Give(ID.mongoose, 1)
+   W.Give(ID.mightyFort, 1)
+   startFight()
+   eq(awaitUse(5), ID.flaskRage, "zuerst das Flaeschchen")
+   local t1 = W.now
+   serverUses(ID.flaskRage, false)                  -- verbraucht, der Buff ist nicht zu erkennen
+   W.Advance(120)
+   eq(#useWhispers(), 1, "ein Elixier wuerde das Flaeschchen ersetzen: zwei Minuten nichts")
+   check(awaitUse(600) == ID.mongoose, "nach zehn Minuten kommen die Elixiere")
+   check(W.now - t1 >= 600, "nicht frueher als nach zehn Minuten: " .. (W.now - t1))
+end)
+
+test("Im Kampf: wer zaubert, faehrt oder tot ist, bekommt nichts", function()
+   consBoot({ scroll = true })
+   W.Give(ID.agility7, 1)
+   startFight()
+   W.world.casting = true
+   W.Advance(10)
+   eq(#useWhispers(), 0, "beim Zaubern nichts")
+   W.world.casting = false
+   W.world.mounted = true
+   W.Advance(10)
+   eq(#useWhispers(), 0, "auf dem Reittier nichts")
+   W.world.mounted = false
+   W.world.onTaxi = true
+   W.Advance(10)
+   eq(#useWhispers(), 0, "auf dem Flug nichts")
+   W.world.onTaxi = false
+   W.world.vehicle = true
+   W.Advance(10)
+   eq(#useWhispers(), 0, "im Fahrzeug nichts")
+   W.world.vehicle = false
+   W.world.dead = true
+   W.Advance(10)
+   eq(#useWhispers(), 0, "tot nichts")
+   W.world.dead = false
+   check(awaitUse(5) == ID.agility7, "danach geht es los")
+end)
+
+test("Im Kampf: eine Stufe zu niedrig, eine Obergrenze je Zeitfenster und der Tod", function()
+   consBoot({ scroll = true })
+   W.Give(ID.agility7, 1)                           -- Stufe 70
+   W.world.level = 60
+   startFight()
+   W.Advance(10)
+   eq(#useWhispers(), 0, "Stufe 60: Rang 7 geht nicht")
+   W.world.level = 80
+
+   -- Obergrenze: zehn Benutzungen in zwei Minuten
+   local C = AutoTravel.Cons
+   local now = W.now
+   for i = 1, 10 do C.state.uses[i] = now - i end
+   W.Advance(10)
+   eq(#useWhispers(), 0, "Obergrenze erreicht")
+   W.Advance(120)
+   check(#useWhispers() >= 1, "nach dem Fenster geht es weiter")
+end)
+
+test("Im Kampf: nach dem Tod gelten die Mindestabstaende nicht mehr", function()
+   consBoot({ scroll = true })
+   W.Give(ID.agility7, 3)
+   startFight()
+   eq(awaitUse(5), ID.agility7, "erste")
+   serverUses(ID.agility7)
+   W.Advance(5)
+   -- der Charakter stirbt: die Buffs sind weg
+   W.world.dead = true
+   W.Fire("PLAYER_DEAD")
+   W.RemoveAura(spellOf(ID.agility7))
+   W.Advance(5)
+   W.world.dead = false
+   W.Advance(1)
+   eq(awaitUse(8), ID.agility7, "gleich wieder, ohne die 45 s abzuwarten")
+end)
+
+test("Im Kampf: ein Befehl, der nie hinausgeht, blockiert nicht fuer immer", function()
+   consBoot({ scroll = true })
+   W.Give(ID.agility7, 2)
+   startFight()
+   W.Advance(0.2)
+   AutoTravel.Net.DropTag("bot")                   -- die Warteschlange verwirft den Befehl
+   W.Advance(10)
+   eq(#useWhispers(), 0, "der Befehl ging nie hinaus")
+   W.Advance(15)                                    -- nach 20 s gilt er als verloren
+   check(awaitUse(10) == ID.agility7, "danach ein neuer Versuch")
+end)
+
+test("/at buffs: Zustand, jetzt, ignorieren, erlauben, liste", function()
+   local B = consBoot(ALL())
+   local slash = SlashCmdList["AUTOTRAVEL"]
+   W.Give(ID.agility7, 2)
+   W.Give(ID.mongoose, 1)
+
+   local n0 = #W.messages
+   slash("buffs")
+   local text = table.concat(W.messages, "\n", n0 + 1)
+   check(text:find("Gegenstand " .. ID.agility7, 1, true), "die Schriftrolle steht in der Liste")
+   check(text:find("Gegenstand " .. ID.mongoose, 1, true), "das Elixier steht in der Liste")
+   check(text:find("Als Naechstes", 1, true), "naechster Schritt genannt")
+   check(text:find("Flaeschchen", 1, true), "Arten genannt")
+
+   -- jetzt: auch ausserhalb des Kampfes
+   W.ClearSent()
+   slash("buffs jetzt")
+   W.Advance(2)
+   eq(#useWhispers(), 1, "'jetzt' sendet auch ausserhalb des Kampfes")
+   serverUses(idOf(useWhispers()[1]))
+
+   -- ignorieren / erlauben
+   slash("buffs ignorieren " .. W.ItemLink(ID.agility7))
+   check(AutoTravel.Cons.IgnoreList()[ID.agility7] == true, "ausgeschlossen")
+   n0 = #W.messages
+   slash("buffs liste")
+   check(table.concat(W.messages, "\n", n0 + 1):find(tostring(ID.agility7), 1, true), "steht in der Liste")
+   startFight()
+   W.Advance(60)
+   for _, t in ipairs(useWhispers()) do
+      check(idOf(t) ~= ID.agility7, "die ausgeschlossene Schriftrolle wird nicht benutzt")
+   end
+   slash("buffs erlauben " .. W.ItemLink(ID.agility7))
+   eq(AutoTravel.Cons.IgnoreList()[ID.agility7], nil, "wieder erlaubt")
+
+   -- ohne Selbstmodus und ohne Erlaubnis
+   n0 = #W.messages
+   B.CustomSlot(1).cons = {}
+   slash("buffs jetzt")
+   check(table.concat(W.messages, "\n", n0 + 1):find("keine Verbrauchsgueter", 1, true), "Profil erlaubt nichts")
+   slash("buffs zuruecksetzen")
+   slash("buffs unsinn")
+end)
+
+test("/at buffs: ohne bekannte Gegenstaende und mit leeren Taschen", function()
+   consBoot(ALL())
+   local n0 = #W.messages
+   SlashCmdList["AUTOTRAVEL"]("buffs")
+   local text = table.concat(W.messages, "\n", n0 + 1)
+   check(text:find("nichts, was das Addon kennt", 1, true), "Hinweis bei leeren Taschen")
+   check(text:find("Als Naechstes: nichts", 1, true), "nichts zu tun")
+   -- Hilfsmittel, die nicht in der Tabelle stehen, werden auch nicht angefasst
+   W.Give(ID.recall, 1)
+   W.Give(ID.waterBreathing, 1)
+   startFight()
+   W.Advance(10)
+   eq(#useWhispers(), 0, "Scroll of Recall und Wasseratmung bleiben liegen")
+end)
+
+test("Taschen: mehrere Staepel und mehrere Taschen werden zusammengezaehlt", function()
+   consBoot({ scroll = true })
+   W.world.bags[0] = { size = 16 }
+   W.world.bags[1] = { size = 16 }
+   W.world.bags[0][3] = { id = ID.agility7, count = 2 }
+   W.world.bags[1][5] = { id = ID.agility7, count = 3 }
+   W.world.bags[1][6] = { id = 12345678, count = 9 }          -- unbekannter Gegenstand
+   local stock = AutoTravel.Cons.Scan()
+   eq(stock[ID.agility7].count, 5, "zusammengezaehlt")
+   check(stock[12345678] == nil, "Unbekanntes wird nicht beachtet")
+   startFight()
+   eq(awaitUse(5), ID.agility7, "benutzt")
+   -- die Pruefung zaehlt ueber alle Staepel: ein Stueck weniger genuegt
+   W.world.bags[0][3].count = 1
+   W.AddAura("Buff", spellOf(ID.agility7))
+   W.Advance(3)
+   eq(AutoTravel.Cons.state.total, 1, "als gelungen gezaehlt")
+end)
+
 print(string.format("\n%d Pruefungen, %d Fehler", passes, failures))
 os.exit(failures == 0 and 0 or 1)
