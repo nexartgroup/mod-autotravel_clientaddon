@@ -4783,5 +4783,232 @@ test("Ergebnis: ein gleichnamiger Buff mit anderer Kennung zaehlt nicht als Erfo
    check(C.state.peace[ID.agility7] ~= nil, "der Fehlschlag wurde erkannt")
 end)
 
+-- ---------------------------------------------------------------------------
+-- 11.8: Wartezeit nach dem Kampf in den Einstellungen
+-- ---------------------------------------------------------------------------
+
+-- Die Wartezeit, die ein Profil bringt, und die, die der Spieler selbst festlegt.
+local function botReady()
+   ready()
+   W.ServerLine("SelfBot is now active.")
+   return AutoTravel.Bot
+end
+
+test("Wartezeit: ohne eigene Einstellung gilt der Wert des Profils, und er geht mit dem Profil hinaus", function()
+   local B = botReady()
+   local cases = { { "normal", 7 }, { "aggressiv", 7 }, { "plus", 7 }, { "verteidigen", 2 },
+                   { "minimal", 1.5 }, { "aengstlich", 1.5 } }
+   for _, c in ipairs(cases) do
+      AutoTravel.Set("Profile", c[1])
+      local v, custom = B.EffectiveGrace()
+      eq(v, c[2], c[1] .. ": Wert des Profils")
+      eq(custom, false, c[1] .. ": nicht selbst festgelegt")
+      W.ClearSent()
+      B.ApplyProfile()
+      W.Advance(15)
+      check(W.SentContains(".at set grace " .. c[2]), c[1] .. ": ." .. "at set grace " .. c[2] .. " geht hinaus")
+      eq(count(".at set grace"), 1, c[1] .. ": genau einmal")
+   end
+end)
+
+test("Wartezeit: ein eigenes Profil bringt seine eigene Wartezeit mit", function()
+   local B = botReady()
+   local c = B.CustomSlot(1)
+   c.combat.dps = true
+   c.grace = 4.5
+   AutoTravel.Set("Profile", "custom1")
+   eq((B.EffectiveGrace()), 4.5, "Wert des eigenen Profils")
+   W.ClearSent()
+   B.ApplyProfile()
+   W.Advance(15)
+   check(W.SentContains(".at set grace 4.5"), "wird gesendet")
+end)
+
+test("Wartezeit: eine selbst festgelegte gilt fuer alle Profile und geht dem Profil vor", function()
+   local B = botReady()
+   AutoTravel.Set("GraceCustom", 1)
+   AutoTravel.Set("GraceSeconds", 3)
+   for _, key in ipairs({ "normal", "verteidigen", "minimal" }) do
+      AutoTravel.Set("Profile", key)
+      local v, custom = B.EffectiveGrace()
+      eq(v, 3, key .. ": der eigene Wert") eq(custom, true, key .. ": selbst festgelegt")
+      W.ClearSent()
+      B.ApplyProfile()
+      W.Advance(15)
+      check(W.SentContains(".at set grace 3"), key .. ": 3 s gehen hinaus")
+      eq(count(".at set grace"), 1, key .. ": genau einmal, nicht zusaetzlich der Wert des Profils")
+   end
+end)
+
+test("Wartezeit: 0 heisst sofort (der Server liest 0 als 'keine Vorgabe'), Grenzen und beschaedigte Werte", function()
+   local B = botReady()
+   AutoTravel.Set("GraceCustom", 1)
+   local function eff(v)
+      AutoTravel.Set("GraceSeconds", v)
+      return (B.EffectiveGrace())
+   end
+   eq(eff(0), 0.1, "0 geht als 0,1 s hinaus, nie als 0")
+   eq(eff(-5), 0.1, "negativ")
+   eq(eff(99), 30, "ueber 30 s")
+   eq(eff("abc"), 2, "keine Zahl: Standard")
+   eq(eff(nil), 2, "nichts gespeichert: Standard")
+   eq(eff(12.5), 12.5, "Dezimalwert bleibt")
+   -- und so geht es an den Server
+   AutoTravel.Set("GraceSeconds", 0)
+   W.ClearSent()
+   B.SendGrace()
+   W.Advance(3)
+   check(W.SentContains(".at set grace 0.1"), "0,1 s gesendet")
+   for _, c in ipairs(W.SentCommands()) do
+      check(c ~= ".at set grace 0", "nie 0 an den Server (er liest es als 'keine Vorgabe')")
+   end
+end)
+
+test("nach dem Handschlag wird die selbst festgelegte Wartezeit erneut gemeldet, die des Profils nicht", function()
+   boot()
+   AutoTravel.Set("GraceCustom", 1)
+   AutoTravel.Set("GraceSeconds", 4)
+   W.Advance(3)
+   hello()
+   W.Advance(2)
+   check(W.SentContains(".at set grace 4"), "erneut gesendet")
+
+   boot()
+   W.Advance(3)
+   hello()
+   W.Advance(2)
+   eq(count(".at set grace"), 0, "ohne eigene Einstellung bleibt es dem Profil ueberlassen")
+end)
+
+test("Einstellungsseite: Haken und Regler fuer die Wartezeit nach dem Kampf", function()
+   local B = botReady()
+   AutoTravel.Set("Profile", "normal")
+   local O = AutoTravel.Options
+   O.Load()
+   local cb, sl = O.graceCheck, O.graceSlider
+   check(cb ~= nil and sl ~= nil, "Haken und Regler sind da")
+   eq(cb:GetChecked(), nil, "Standard: es gilt der Wert des Profils")
+   eq(sl:GetAlpha(), 0.55, "der Regler ist gedimmt, solange der Haken aus ist")
+
+   -- Haken setzen: der gespeicherte Wert gilt sofort
+   W.ClearSent()
+   cb:SetChecked(true)
+   cb.__scripts.OnClick(cb)
+   W.Advance(3)
+   eq(AutoTravel.Get("GraceCustom"), 1, "gespeichert")
+   check(W.SentContains(".at set grace 2"), "der gespeicherte Wert (Standard 2 s) ging sofort hinaus")
+   eq(sl:GetAlpha(), 1, "der Regler ist voll sichtbar")
+
+   -- Regler ziehen: neuer Wert nach der Entprellung
+   W.ClearSent()
+   sl:SetValue(5)
+   W.Advance(1)
+   eq(AutoTravel.Get("GraceSeconds"), 5, "Wert gespeichert")
+   check(W.SentContains(".at set grace 5"), "5 s gesendet")
+   eq(count(".at set grace"), 1, "genau einmal")
+
+   -- Haken weg: zurueck zum Wert des Profils (Normal: 7 s)
+   W.ClearSent()
+   cb:SetChecked(false)
+   cb.__scripts.OnClick(cb)
+   W.Advance(3)
+   eq(AutoTravel.Get("GraceCustom"), 0, "aus")
+   check(W.SentContains(".at set grace 7"), "der Wert des Profils geht wieder hinaus")
+   eq(sl:GetAlpha(), 0.55, "Regler wieder gedimmt")
+   eq(B.IsRunning(), true, "Selbstmodus unberuehrt")
+end)
+
+test("Einstellungsseite: den Regler anzufassen schaltet 'selbst festlegen' ein", function()
+   botReady()
+   local O = AutoTravel.Options
+   O.Load()
+   eq(AutoTravel.Get("GraceCustom"), 0, "zunaechst aus")
+   O.graceSlider:SetValue(9)
+   W.Advance(1)
+   eq(AutoTravel.Get("GraceCustom"), 1, "der Regler schaltet es ein")
+   eq(AutoTravel.Get("GraceSeconds"), 9, "mit seinem Wert")
+   eq(O.graceCheck:GetChecked(), 1, "der Haken folgt")
+end)
+
+test("Einstellungsseite: beim Laden aus gespeicherten Werten stimmen Haken, Regler und Text", function()
+   boot()
+   AutoTravel.Set("GraceCustom", 1)
+   AutoTravel.Set("GraceSeconds", 12)
+   AutoTravel.Options.Load()
+   local O = AutoTravel.Options
+   eq(O.graceCheck:GetChecked(), 1, "Haken gesetzt")
+   eq(O.graceSlider:GetValue(), 12, "Regler auf 12")
+end)
+
+test("/at wartezeit: setzen, Komma, 0, ungueltig, Anzeige und zurueck zum Profil", function()
+   local B = botReady()
+   AutoTravel.Set("Profile", "normal")
+   local slash = SlashCmdList["AUTOTRAVEL"]
+   local function say(cmd)
+      local n0 = #W.messages
+      slash(cmd)
+      return table.concat(W.messages, "\n", n0 + 1)
+   end
+
+   W.ClearSent()
+   check(say("wartezeit 4"):find("4 s", 1, true), "meldet den Wert")
+   W.Advance(3)
+   eq(AutoTravel.Get("GraceCustom"), 1, "selbst festgelegt")
+   eq(AutoTravel.Get("GraceSeconds"), 4, "gespeichert")
+   check(W.SentContains(".at set grace 4"), "gesendet")
+
+   W.ClearSent()
+   slash("wartezeit 1,5")
+   W.Advance(3)
+   eq(AutoTravel.Get("GraceSeconds"), 1.5, "Komma wird verstanden")
+   check(W.SentContains(".at set grace 1.5"), "als 1.5 gesendet")
+
+   W.ClearSent()
+   slash("wartezeit 0")
+   W.Advance(3)
+   eq(AutoTravel.Get("GraceSeconds"), 0, "0 wird gespeichert")
+   check(W.SentContains(".at set grace 0.1"), "und als 0,1 s gesendet, nicht als 0")
+
+   W.ClearSent()
+   check(say("wartezeit 31"):find("Verwendung", 1, true), "ueber 30 wird abgelehnt")
+   check(say("wartezeit abc"):find("Verwendung", 1, true), "Unsinn wird abgelehnt")
+   check(say("wartezeit -2"):find("Verwendung", 1, true), "negativ wird abgelehnt")
+   W.Advance(3)
+   eq(AutoTravel.Get("GraceSeconds"), 0, "und aendert nichts")
+   eq(count(".at set grace"), 0, "und sendet nichts")
+
+   local text = say("wartezeit")
+   check(text:find("selbst festgelegt", 1, true), "ohne Angabe: Anzeige")
+
+   W.ClearSent()
+   check(say("wartezeit profil"):find("Wert des Profils", 1, true), "zurueck zum Profil")
+   W.Advance(3)
+   eq(AutoTravel.Get("GraceCustom"), 0, "aus")
+   check(W.SentContains(".at set grace 7"), "Normal: 7 s gesendet")
+   check(say("wartezeit"):find("Wert des Profils", 1, true), "Anzeige: Wert des Profils")
+   eq(B.IsRunning(), true, "Selbstmodus unberuehrt")
+end)
+
+test("Profil-Editor: der Hinweis erscheint, wenn die Wartezeit in den Einstellungen festgelegt ist", function()
+   ready()
+   local P = AutoTravel.ProfileEditor
+   P.Select("builtin", "normal")
+   check(P.graceNote ~= nil, "Hinweisfeld vorhanden")
+   eq(P.graceNote:GetText(), "", "ohne eigene Wartezeit kein Hinweis")
+   AutoTravel.Set("GraceCustom", 1)
+   AutoTravel.Set("GraceSeconds", 3)
+   AutoTravel.Options.Load()
+   local t = P.graceNote:GetText()
+   check(t:find("Gilt gerade nicht", 1, true), "der Hinweis steht da")
+   check(t:find("3 s", 1, true), "mit dem Wert")
+   AutoTravel.Set("GraceCustom", 0)
+   AutoTravel.Options.Load()
+   eq(P.graceNote:GetText(), "", "wieder weg")
+   -- auch beim Wechsel des Profils im Editor
+   AutoTravel.Set("GraceCustom", 1)
+   P.Select("builtin", "plus")
+   check(P.graceNote:GetText():find("Gilt gerade nicht", 1, true), "bleibt beim Profilwechsel")
+end)
+
 print(string.format("\n%d Pruefungen, %d Fehler", passes, failures))
 os.exit(failures == 0 and 0 or 1)

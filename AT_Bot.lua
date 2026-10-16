@@ -706,6 +706,27 @@ function B.FormCommand(form)
    return cmd
 end
 
+-- Die Wartezeit nach dem Kampf, wie sie an den Server geht, und ob sie selbst festgelegt ist. Ein selbst
+-- festgelegter Wert (Einstellungen, /at wartezeit) gilt fuer alle Profile und geht dem des Profils vor. Der
+-- Server liest 0 als "keine Vorgabe" und nimmt dann AutoTravel.CombatGraceMs (2 s); "sofort" geht deshalb als
+-- 0,1 s hinaus -- das ist weniger als ein Takt des Moduls (0,2 s).
+local MIN_GRACE_SENT, MAX_GRACE_SENT = 0.1, 30
+
+function B.EffectiveGrace(p)
+   if AT.GetBool("GraceCustom") then
+      local v = tonumber(AT.Get("GraceSeconds")) or 2
+      if v < MIN_GRACE_SENT then v = MIN_GRACE_SENT end
+      if v > MAX_GRACE_SENT then v = MAX_GRACE_SENT end
+      return v, true
+   end
+   p = p or B.Current()
+   return tonumber(p and p.grace) or 2.0, false
+end
+
+function B.SendGrace(p)
+   AT.SetSessionOption("grace", (B.EffectiveGrace(p)))
+end
+
 -- formOnly: nur die Kampfstrategien neu senden (Gestaltwechsel); "nc", Wartezeit
 -- und Meldung bleiben unberuehrt.
 function B.ApplyProfile(formOnly)
@@ -758,7 +779,7 @@ function B.ApplyProfile(formOnly)
 
    if formOnly then return end
    -- Wartezeit nach dem Kampf: gilt nur fuer die eigene Sitzung des Servermoduls.
-   AT.SetSessionOption("grace", p.grace or 2.0)
+   B.SendGrace(p)
    AT.Print("Profil: |cffffffff" .. p.name .. "|r - " .. p.desc)
 end
 

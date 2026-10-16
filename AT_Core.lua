@@ -35,7 +35,7 @@ local AT = AutoTravel
 local CB = AT.Carb
 local N  = AT.Net
 
-AT.VERSION = "11.7"
+AT.VERSION = "11.8"
 local PREFIX = "|cff33ccffAutoTravel|r: "
 
 -- Anzeigenamen fuer Optionen -> Tastaturbelegung (siehe Bindings.xml).
@@ -66,6 +66,12 @@ local DEFAULTS = {
    AutoResume       = 1,       -- nach Ruhezeit selbst zurueckgeben
    QuietSeconds     = 8,       -- Ruhe, bevor der Countdown beginnt
    CountdownSeconds = 3,       -- sichtbarer Countdown, den jede Eingabe abbricht
+
+   -- Wartezeit nach dem Kampf, bevor die Reise weitergeht (der Bot kann looten). Jedes Profil bringt eine mit
+   -- (Normal, Aggressiv, Plus 7 s; Verteidigen 2 s; Minimal, Aengstlich 1,5 s). Eine eigene gilt fuer alle
+   -- Profile, aber nur, wenn der Spieler sie ausdruecklich festgelegt hat (GraceCustom).
+   GraceCustom   = 0,
+   GraceSeconds  = 2,
 
    -- Zielradius. Der Server kennt seinen eigenen Standard; gemeldet wird nur,
    -- was der Spieler selbst eingestellt hat (ArriveCustom).
@@ -190,6 +196,11 @@ function AT.After(seconds, fn) table.insert(timers, { at = GetTime() + seconds, 
 function AT.OnServerKnown()
    if AT.GetBool("ArriveCustom") then
       AT.SetSessionOption("arrival", AT.Get("ArriveYards"))
+   end
+   -- Die Wartezeit gilt je Sitzung des Servers. Hat der Spieler eine eigene festgelegt, gilt sie auch ohne
+   -- Selbstmodus; sonst kommt der Wert des Profils mit dem Profil (AT.Bot.ApplyProfile).
+   if AT.GetBool("GraceCustom") and AT.Bot then
+      AT.Bot.SendGrace()
    end
    -- Das Debugkennzeichen gilt je Sitzung des Servers und ging mit dem Abmelden
    -- verloren; das Addon merkt es sich aber dauerhaft.
@@ -686,6 +697,7 @@ local function Help()
       "/at tpmodus <modul|go>  Teleportweg waehlen",
       "/at nachfrage         Sicherheitsabfrage vor Teleport an/aus",
       "/at ziel <n>          Zielradius in Yards",
+      "/at wartezeit <s>     Wartezeit nach dem Kampf (0 bis 30; 'profil' = Wert des Profils)",
       "/at ruhe <s>          Ruhezeit bis zur Uebernahme (Sekunden)",
       "/at knopf             Minimap-Knopf an/aus",
       "/at panel             Fenster an/aus",
@@ -909,6 +921,31 @@ SlashCmdList["AUTOTRAVEL"] = function(input)
          if AT.Options then AT.Options.Load() end
       else
          AT.Print("Verwendung: /at ziel <yards>  (1 bis 100)")
+      end
+
+   elseif cmd == "wartezeit" or cmd == "grace" then
+      local arg = string.lower(AT.trim(rest or ""))
+      if arg == "" then
+         local v, custom = AT.Bot.EffectiveGrace()
+         AT.Print("Wartezeit nach dem Kampf: " .. v .. " s (" ..
+                  (custom and "selbst festgelegt" or "Wert des Profils") .. ")")
+         AT.Print("Aendern: /at wartezeit <sekunden>  (0 bis 30; 0 = sofort) oder /at wartezeit profil")
+      elseif arg == "profil" or arg == "auto" then
+         AT.Set("GraceCustom", 0)
+         AT.Bot.SendGrace()
+         AT.Print("Wartezeit nach dem Kampf: Wert des Profils (" .. (AT.Bot.EffectiveGrace()) .. " s)")
+         if AT.Options then AT.Options.Load() end
+      else
+         local n = tonumber((string.gsub(arg, ",", ".")))
+         if n and n >= 0 and n <= 30 then
+            AT.Set("GraceSeconds", n)
+            AT.Set("GraceCustom", 1)
+            AT.Bot.SendGrace()
+            AT.Print("Wartezeit nach dem Kampf: " .. (AT.Bot.EffectiveGrace()) .. " s (fuer alle Profile)")
+            if AT.Options then AT.Options.Load() end
+         else
+            AT.Print("Verwendung: /at wartezeit <sekunden>  (0 bis 30; 0 = sofort) | profil")
+         end
       end
 
    elseif cmd == "ruhe" then

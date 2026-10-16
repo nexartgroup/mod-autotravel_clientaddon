@@ -54,9 +54,16 @@ drueckst.
 
 * **Ausdruecklich uebernommen** (Knopf, Taste, Mittelklick): der Halt endet nur,
   wenn du auf **Weiter** klickst. Er laeuft nie von selbst aus.
-* **Nach einem Kampf**: der Autopilot wartet, bis du eine Weile ruhig bist.
-  Danach laeuft ein sichtbarer **Countdown** (Standard 3 s), den jede Eingabe
-  abbricht. Erst dann faehrt er weiter.
+* **Nach einem Kampf**: zuerst die **Wartezeit nach dem Kampf**. Auch wenn der Kampf
+  vorbei ist, bleibt der Server noch so lange im Zustand "Kampf" und das Panel bei
+  *Kampf - du hast die Kontrolle*: in dieser Zeit kann der Bot looten, ohne dass der
+  Autopilot schon weiterlaeuft. Sie kommt vom Profil (Normal, Aggressiv und Plus 7 s,
+  Verteidigen 2 s, Minimal und Aengstlich 1,5 s) oder von dir: *Interface -> AddOns ->
+  AutoTravel*, Abschnitt "Uebergabe an den Spieler", Haken **Wartezeit nach dem Kampf
+  selbst festlegen** und Regler (0 bis 30 s, 0 = sofort), oder `/at wartezeit <sekunden>`
+  (`/at wartezeit profil` stellt den Wert des Profils wieder ein). Danach wartet der
+  Autopilot, bis du eine Weile ruhig bist, und es laeuft ein sichtbarer **Countdown**
+  (Standard 3 s), den jede Eingabe abbricht. Erst dann faehrt er weiter.
 
 Was als "Eingabe" zaehlt: Bewegung, Fallen, Mausblick, Maustasten, merkliche
 Mausbewegung, Umschalt-/Strg-/Alt-Taste, Zaubern, Kampf, offener Chat, offene
@@ -97,6 +104,7 @@ Die Pruefung bleibt beim Server; die gesperrten Knoepfe sind nur Komfort.
 | `/at knoten` | Zustand des Playerbot-Knotengraphen |
 | `/at ziel <yd>` | Zielradius der eigenen Reise |
 | `/at ruhe <s>` | Ruhezeit bis zur Uebernahme |
+| `/at wartezeit [<s> \| profil]` | Wartezeit nach dem Kampf fuer alle Profile (0 bis 30 s, 0 = sofort); `profil` = Wert des Profils; ohne Angabe: Anzeige (ab 11.8) |
 | `/at profil`, `/at profil <name>` | Profile anzeigen / ein Profil waehlen |
 | `/at profil bearbeiten` | Profil-Editor oeffnen |
 | `/at profil reset <name>`, `/at profil reset alle` | vorgegebene Profile auf die Standardwerte zuruecksetzen |
@@ -169,7 +177,8 @@ Profil behaelt seine Werte, auch wenn eine spaetere Version den Standard anpasst
 das Zuruecksetzen holt den neuen Standard. Stellst du alles von Hand auf den Standard
 zurueck, verschwindet die Aenderung von selbst. Die Wartezeit liegt zwischen 0,1 und 30 s
 (der Server liest 0 als "keine Vorgabe"); Wartezeit und Zusatzbefehle speichert die
-Eingabetaste.
+Eingabetaste. Eine Wartezeit, die du in den Optionen fuer alle Profile festgelegt hast, geht
+diesem Wert vor; der Editor weist darauf hin.
 
 Jede Strategie eines vorgegebenen Profils hat **drei Zustaende**, ein Klick wechselt:
 *nicht gesetzt* (grau: es bleibt, was `co !` / `nc !` als Standard hinterlassen), *an* (`+`)
@@ -386,6 +395,23 @@ sodass er den Stop nicht auf der Leitung ueberholt. Gleichartige wartende Befehl
 Regler nur seinen letzten Wert meldet. Das Format der Nachrichten und die
 Versionsregeln stehen in der README von mod-autotravel (Abschnitt "Protokoll").
 Das Addon spricht Protokoll 4 und versteht auch Module mit Protokoll 3.
+
+## Aenderungen in 11.8
+
+* **Wartezeit nach dem Kampf in den Einstellungen** (*Interface -> AddOns -> AutoTravel*, Abschnitt
+  "Uebergabe an den Spieler"): der Haken *Wartezeit nach dem Kampf selbst festlegen* und ein Regler
+  (0 bis 30 s) legen sie fuer alle Profile fest; ohne Haken gilt wie bisher der Wert des Profils. Sie ist
+  der Grund, warum das Panel nach dem Kampf noch einige Sekunden auf *Kampf - du hast die Kontrolle*
+  steht: der Server bleibt so lange im Zustand "Kampf", damit der Bot looten kann (Normal, Aggressiv,
+  Plus 7 s). Bisher liess sie sich nur im Profil-Editor oder mit `.at set grace` aendern.
+* `/at wartezeit [<sekunden> | profil]`. **0 heisst sofort**: der Server liest `grace 0` als "keine
+  Vorgabe" und nimmt `AutoTravel.CombatGraceMs` (2 s); das Addon sendet deshalb 0,1 s, weniger als einen
+  Takt des Moduls (0,2 s).
+* Der eigene Wert geht sofort hinaus, mit jedem Profil und nach dem Handschlag erneut (auch ohne
+  Selbstmodus). Der Profil-Editor weist darauf hin, dass sein Wert gerade nicht gilt; der Tooltip der
+  Profilknoepfe nennt den Wert, der gilt.
+* Tests: rund 90 neue Pruefungen; 20 absichtlich eingebaute Fehler werden alle erkannt.
+* Das Protokoll aendert sich nicht.
 
 ## Aenderungen in 11.7
 

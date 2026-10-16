@@ -36,7 +36,7 @@ local P = AT.ProfileEditor
 local frame, content
 local sel = { kind = "custom", id = 1 }         -- kind: "builtin" (id = Schluessel) | "custom" (id = Platz)
 local boxes = { combat = {}, noncombat = {}, cons = {} }
-local nameEdit, extraEdit, graceEdit
+local nameEdit, extraEdit, graceEdit, graceNote
 local titleFs, descFs, nameLbl, useBtn, clearBtn, resetBtn, hintFs, petBtn
 local selButtons = {}
 local MAX_LABEL = 14
@@ -265,6 +265,20 @@ RefreshHeader = function()
    end
 end
 
+-- Der Hinweis unter dem Feld "Wartezeit": gilt sie gerade, oder ist in den Einstellungen eine eigene festgelegt?
+-- Eigene Funktion, damit die Einstellungsseite sie rufen kann, ohne den ganzen Editor neu zu laden.
+function P.RefreshGrace()
+   if not graceNote then return end
+   if AT.GetBool("GraceCustom") then
+      graceNote:SetText("Gilt gerade nicht: in den Einstellungen (Uebergabe) auf " ..
+                        FormatGrace(AT.Get("GraceSeconds")) .. " s festgelegt.")
+      graceNote:Show()
+   else
+      graceNote:SetText("")
+      graceNote:Hide()
+   end
+end
+
 local function LoadSelection()
    if not frame then return end
    local v = View()
@@ -288,6 +302,7 @@ local function LoadSelection()
 
    if extraEdit then extraEdit:SetText(v.extra or "") end
    if graceEdit then graceEdit:SetText(FormatGrace(v.grace)) end
+   P.RefreshGrace()
    if petBtn then petBtn.label:SetText("Haltung: " .. AT.Bot.PetLabel(v.pet)) end
 
    for _, kind in ipairs({ "combat", "noncombat", "cons" }) do
@@ -502,6 +517,14 @@ local function Build()
    local graceLbl = c:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
    graceLbl:SetPoint("TOPLEFT", 16, -230)
    graceLbl:SetText("Wartezeit nach dem Kampf in Sekunden (der Bot kann looten)")
+
+   -- Hat der Spieler die Wartezeit in den Einstellungen festgelegt, gilt sie fuer alle Profile: dieses Feld
+   -- bleibt, aber es gilt gerade nicht. Der Hinweis steht darunter.
+   graceNote = c:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+   graceNote:SetPoint("TOPLEFT", 16, -246)
+   graceNote:SetTextColor(0.91, 0.65, 0.29)
+   graceNote:SetText("")
+   P.graceNote = graceNote              -- fuer Tests
 
    graceEdit = CreateFrame("EditBox", "AutoTravelProfileGrace", c, "InputBoxTemplate")
    graceEdit:SetPoint("LEFT", graceLbl, "RIGHT", 12, 0)
