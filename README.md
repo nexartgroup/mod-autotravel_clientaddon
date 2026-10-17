@@ -54,9 +54,16 @@ drueckst.
 
 * **Ausdruecklich uebernommen** (Knopf, Taste, Mittelklick): der Halt endet nur,
   wenn du auf **Weiter** klickst. Er laeuft nie von selbst aus.
-* **Nach einem Kampf**: der Autopilot wartet, bis du eine Weile ruhig bist.
-  Danach laeuft ein sichtbarer **Countdown** (Standard 3 s), den jede Eingabe
-  abbricht. Erst dann faehrt er weiter.
+* **Nach einem Kampf**: zuerst die **Wartezeit nach dem Kampf**. Auch wenn der Kampf
+  vorbei ist, bleibt der Server noch so lange im Zustand "Kampf" und das Panel bei
+  *Kampf - du hast die Kontrolle*: in dieser Zeit kann der Bot looten, ohne dass der
+  Autopilot schon weiterlaeuft. Sie kommt vom Profil (Normal, Aggressiv und Plus 7 s,
+  Verteidigen 2 s, Minimal und Aengstlich 1,5 s) oder von dir: *Interface -> AddOns ->
+  AutoTravel*, Abschnitt "Uebergabe an den Spieler", Haken **Wartezeit nach dem Kampf
+  selbst festlegen** und Regler (0 bis 30 s, 0 = sofort), oder `/at wartezeit <sekunden>`
+  (`/at wartezeit profil` stellt den Wert des Profils wieder ein). Danach wartet der
+  Autopilot, bis du eine Weile ruhig bist, und es laeuft ein sichtbarer **Countdown**
+  (Standard 3 s), den jede Eingabe abbricht. Erst dann faehrt er weiter.
 
 Was als "Eingabe" zaehlt: Bewegung, Fallen, Mausblick, Maustasten, merkliche
 Mausbewegung, Umschalt-/Strg-/Alt-Taste, Zaubern, Kampf, offener Chat, offene
@@ -97,12 +104,14 @@ Die Pruefung bleibt beim Server; die gesperrten Knoepfe sind nur Komfort.
 | `/at knoten` | Zustand des Playerbot-Knotengraphen |
 | `/at ziel <yd>` | Zielradius der eigenen Reise |
 | `/at ruhe <s>` | Ruhezeit bis zur Uebernahme |
+| `/at wartezeit [<s> \| profil]` | Wartezeit nach dem Kampf fuer alle Profile (0 bis 30 s, 0 = sofort); `profil` = Wert des Profils; ohne Angabe: Anzeige (ab 11.8) |
 | `/at profil`, `/at profil <name>` | Profile anzeigen / ein Profil waehlen |
 | `/at profil bearbeiten` | Profil-Editor oeffnen |
 | `/at profil reset <name>`, `/at profil reset alle` | vorgegebene Profile auf die Standardwerte zuruecksetzen |
 | `/at bot`, `/at botan`, `/at botaus` | Playerbot-Steuerung / Selbstmodus |
 | `/at buffs` | Verbrauchsgueter im Kampf: was in den Taschen liegt, was wirkt, was als Naechstes drankommt (ab 11.6) |
-| `/at buffs jetzt` | einen Schritt sofort ausfuehren, auch ausserhalb des Kampfes (zum Ausprobieren) |
+| `/at buffs jetzt` | einen Schritt sofort ausfuehren, auch ausserhalb des Kampfes (zum Ausprobieren); nennt den Grund, wenn gerade nichts geht |
+| `/at buffs wert [<Wert>]` | welche Schriftrolle benutzt wird (ab 11.7): ohne Angabe die Auswahl anzeigen; `staerke`, `beweglichkeit`, `intelligenz`, `ausdauer`, `willenskraft`, `schutz` stellt einen Wert fest ein, `auto` waehlt wieder nach Klasse und Talentbaum |
 | `/at buffs ignorieren <Link>`, `erlauben <Link>`, `liste`, `zuruecksetzen` | einen Gegenstand ausschliessen / wieder erlauben / Liste anzeigen / Sperren und Mindestabstaende loeschen |
 | `/at karte <id>`, `/at karten` | Karten-ID erzwingen / Kartentabelle neu aufbauen |
 | `/at optionen`, `/at panel`, `/at knopf`, `/at debug` | Oberflaeche und Diagnose |
@@ -168,7 +177,8 @@ Profil behaelt seine Werte, auch wenn eine spaetere Version den Standard anpasst
 das Zuruecksetzen holt den neuen Standard. Stellst du alles von Hand auf den Standard
 zurueck, verschwindet die Aenderung von selbst. Die Wartezeit liegt zwischen 0,1 und 30 s
 (der Server liest 0 als "keine Vorgabe"); Wartezeit und Zusatzbefehle speichert die
-Eingabetaste.
+Eingabetaste. Eine Wartezeit, die du in den Optionen fuer alle Profile festgelegt hast, geht
+diesem Wert vor; der Editor weist darauf hin.
 
 Jede Strategie eines vorgegebenen Profils hat **drei Zustaende**, ein Klick wechselt:
 *nicht gesetzt* (grau: es bleibt, was `co !` / `nc !` als Standard hinterlassen), *an* (`+`)
@@ -251,10 +261,17 @@ Servers und gehen nie als `co`/`nc` hinaus.
 
 **Welche Gegenstaende.** Nur Buffs, die im Kampf nuetzen. Das entscheidet nicht eine Namensliste, sondern die Regel
 des Servers: Elixiere und Flaeschchen stehen in `spell_group` 1 (Kampf) oder 2 (Waechter). Wasseratmung,
-Wasserwandeln, Unsichtbarkeit und Untote erkennen, Traumsicht, Tarnung und aehnliche Hilfsmittel stehen in keiner
-Gruppe und fehlen. Schriftrollen: Staerke, Beweglichkeit, Intelligenz, Ausdauer, Willenskraft und Schutz (alle Stufen),
-dazu die Runenschriftrolle der Seelenstaerke; Rueckruf-Schriftrollen fehlen. Traenke und andere Verbrauchsgueter gehoeren
-nicht dazu.
+Unsichtbarkeit und Untote erkennen, Traumsicht, Tarnung und aehnliche Hilfsmittel stehen in keiner Gruppe und fehlen;
+das Elixier des Wasserwandelns steht zwar in Gruppe 2, ist aber kein Kampfbuff und fehlt ausdruecklich (sein Platz gilt
+trotzdem als belegt, siehe unten). Schriftrollen: Staerke, Beweglichkeit, Intelligenz, Ausdauer, Willenskraft und Schutz
+(alle Stufen), dazu die Runenschriftrolle der Seelenstaerke; Rueckruf-Schriftrollen fehlen. Traenke und andere
+Verbrauchsgueter gehoeren nicht dazu. Nicht aufgenommen, weil ihr Zauber nur ein Script ist und die Datenbank nicht
+verraet, was es wirkt: *Flask of the North* und die Mixtures der Alchemisten (`tools/gen_consumables.py` fuehrt sie
+einzeln auf und bricht ab, wenn ein weiteres Flaeschchen unbemerkt fehlte).
+
+Als **belegt** gilt ein Platz auch, wenn dort ein Zauber wirkt, der kein Elixier ist: die Gruppen des Servers enthalten
+auch Juju, Zanza, R.O.I.D.S., Lungensaft, Wasserwandeln u. a. (`AT.ConsGroups` in `AT_ConsumableData.lua`; 25 Zauber, die
+zu keinem aufgenommenen Gegenstand gehoeren). Wirkt eines, benutzt das Addon dort kein Elixier -- der Server ersetzte es.
 
 **Plaetze.** Die Regeln des Servers bestimmen, was sich vertraegt, und das Addon richtet sich danach -- sonst
 ersetzte es einen Buff durch den anderen, fand den ersten wieder fehlend und verbrauchte den ganzen Vorrat:
@@ -264,19 +281,64 @@ ersetzte es einen Buff durch den anderen, fand den ersten wieder fehlend und ver
 | Kampfelixier | je Charakter wirkt eines; gewaehlt wird das mit der hoechsten Gegenstandsstufe, das der Charakter tragen darf |
 | Waechterelixier | ebenso |
 | Flaeschchen | belegt beide Plaetze. Es wird nur benutzt, wenn **keiner** der beiden belegt ist; wirkt ein Flaeschchen, bleiben die Elixiere liegen |
-| Schriftrolle | je Wert (Staerke ...) wirkt eine; gewaehlt wird die hoechste Stufe, die der Charakter tragen darf. Wirkt irgendeine Stufe, ist der Wert erledigt |
+| Schriftrolle | **ein einziger Platz fuer alle sechs Werte** (`spell_group` 1087, "exklusiv"): eine neue Schriftrolle *entfernt* die alte, auch die eines anderen Werts. Wirkt irgendeine, ist der Platz belegt; gewaehlt wird ein Wert (siehe unten) und davon die hoechste Stufe, die der Charakter tragen darf |
+| Runenschriftrolle der Seelenstaerke | steht nicht in dieser Gruppe, wirkt also neben einer Schriftrolle. Ihr Zauber ist nur ein Script, der Buff auf dem Charakter ist Zauber 72590, und der gehoert zu den **Ausdauerbuffs** (`spell_group` 1084, "der staerkste gewinnt"). Wirkt schon einer (Machtwort: Seelenstaerke, Gebet der Seelenstaerke, Schriftrolle der Ausdauer), bleibt sie liegen: der Kern verwirft den schwaecheren Buff, *nachdem* sie verbraucht ist |
+
+**Welche Schriftrolle.** Weil nur eine wirkt, waehlt das Addon *einen* Wert, statt sie reihum zu benutzen (das
+verbrauchte mehrere je Kampf, denn jede ersetzte die vorige und liess sie wieder fehlen -- das war bis 11.6 so). Die
+Wahl richtet sich nach der Klasse, bei Krieger, Paladin, Schamane und Druide auch nach dem Talentbaum mit den meisten
+Punkten (bei Gleichstand der erste, wie beim Server):
+
+| Klasse | Reihenfolge der Werte |
+|---|---|
+| Krieger | Staerke, Ausdauer, Schutz (Schutzbaum: Ausdauer zuerst) |
+| Paladin | Staerke, Intelligenz, Ausdauer, Schutz (Heilig: Intelligenz zuerst; Schutz: Ausdauer zuerst) |
+| Todesritter | Staerke, Ausdauer, Schutz |
+| Jaeger, Schurke | Beweglichkeit, Ausdauer, Schutz |
+| Schamane | Intelligenz, Beweglichkeit, Ausdauer (Verstaerkung: Beweglichkeit zuerst) |
+| Druide | Intelligenz, Beweglichkeit, Ausdauer (Wilder Kampf: Beweglichkeit zuerst) |
+| Magier, Hexenmeister | Intelligenz, Ausdauer, Willenskraft |
+| Priester | Intelligenz, Willenskraft, Ausdauer |
+
+Benutzt wird der erste Wert der Liste, von dem eine Schriftrolle in den Taschen liegt. Das ist eine **Annahme, keine
+Messung**: `/at buffs wert <Wert>` stellt einen Wert fest ein, `/at buffs wert auto` waehlt wieder nach der Tabelle.
+Liegen nur Schriftrollen fuer Werte da, die nicht in der Liste stehen, benutzt das Addon keine; `/at buffs` sagt es.
+
+**Schriftrollen und das Ziel.** Eine Schriftrolle wirkt auf ein freundliches Ziel (so steht es in ihrem Tooltip; die
+Zauberdaten liegen hier nicht vor). Der Bot schickt beim Benutzen keinen Zielwunsch; der Server nimmt dann die Auswahl
+des Spielers, wenn sie ein gueltiges Ziel ist, und sonst den Charakter selbst. Ist im Client ein Verbuendeter
+(nicht man selbst) ausgewaehlt, wartet das Addon mit der Schriftrolle. Die Auswahl, die der Bot auf dem Server trifft
+(ein Heiler zielt auf Mitspieler), sieht der Client nicht. Ging eine Schriftrolle an einen anderen, sieht das Addon
+den Verbrauch, aber keinen Buff und sperrt den Platz zehn Minuten.
 
 **Sicherungen gegen Verschwendung.** Das sind Gegenstaende, die du gesammelt hast.
 
 * Nach einer Benutzung gilt je Platz ein Mindestabstand: 45 s, wenn der Buff danach zu sehen war; **10 Minuten**,
   wenn der Gegenstand verbraucht wurde, der Buff aber nicht zu sehen war (dann ist die Erkennung unsicher, und das
   Addon warnt einmal).
-* Hoechstens 10 Benutzungen in 2 Minuten, 3,5 s zwischen zwei Benutzungen (die Kategorie hat 3 s Abklingzeit).
-* Der Server benutzt nur, wenn der Charakter steht und nicht zaubert. Das Addon sendet deshalb nicht, solange du
-  zauberst, fliegst, reitest oder in einem Fahrzeug sitzt, und versucht es je Gegenstand bis zu fuenfmal.
-* Geht ein Gegenstand im Kampf nicht (fuenf Fehlschlaege), merkt sich das Addon das fuer die Sitzung und benutzt ihn
-  **in den 25 s nach dem Kampf** (ob ein Elixier im Kampf erlaubt ist, haengt vom Zauber ab und laesst sich im Client
-  nicht lesen). Klappt es auch dann nicht, ist der Gegenstand 90 s gesperrt, und du erfaehrst es.
+* Hoechstens 10 Benutzungen in 2 Minuten. Nach einer Benutzung vergehen 3,1 s, **ab dem Moment, in dem sie zu sehen
+  ist**: die Abklingzeit der Kategorie (3 s fuer Elixiere und Flaeschchen) laeuft ab der Ausfuehrung, nicht ab dem
+  Senden, und die kann hinter einem Zauber liegen.
+* Der Server benutzt nur, wenn der Charakter steht und nicht zaubert. Das Addon sendet deshalb nicht, solange der
+  Charakter **laeuft, faellt**, zaubert (auch Kanalzauber), fliegt, reitet oder in einem Fahrzeug sitzt; ein Befehl,
+  der waehrend der Bewegung hinausginge, wuerde abgewiesen und als Fehlschlag des Gegenstands zaehlen.
+* Bewegt sich der Charakter oder zaubert er, *waehrend* ein Befehl unterwegs ist, kann der Server ihn aus diesem Grund
+  abgewiesen haben. Das sagt nichts ueber den Gegenstand: es zaehlt nicht als Fehlschlag (hoechstens fuenfmal in Folge,
+  dann doch).
+* **Jaeger** bekommen im Kampf nichts: der Server zaehlt das Automatische Schiessen als Zauber (`UseItemAction` fragt
+  `IsNonMeleeSpellCast(false)`), und der Client sieht es nicht. Fuer sie kommt alles **in den 25 s nach dem Kampf**.
+  Auch das Schiessen mit dem Zauberstab ist so ein Dauerzauber; wer es im Kampf benutzt, bekommt Abweisungen, die
+  die Sperren unten auffangen.
+* Ein Befehl gilt erst nach 7 s als abgewiesen: hinter einem Zauber mit Zauberzeit wartet er auf dessen Ende
+  (`PlayerbotAI::UpdateAI`), ein Kanalzauber weist ihn sofort ab. Mit 3,5 s galt ein wartender Befehl faelschlich als
+  abgewiesen.
+* Geht ein Gegenstand im Kampf nicht (drei Fehlschlaege in Folge), merkt sich das Addon das (eine halbe Stunde lang) und
+  benutzt ihn **in den 25 s nach dem Kampf** (ob ein Elixier im Kampf erlaubt ist, haengt vom Zauber ab und laesst
+  sich im Client nicht lesen). Klappt es auch dann nicht, ist der Gegenstand gesperrt -- mit **wachsender Pause**
+  (90 s, 5 min, 15 min, danach eine Stunde), damit ein dauerhaft abgewiesener Gegenstand nicht bei jedem Kampf
+  Befehle erzeugt. Das haeufigste Beispiel: ein staerkerer Buff derselben Art, den der Bot selbst wirkt (Machtwort:
+  Seelenstaerke, Arkane Brillanz, Horn des Winters), weist die Schriftrolle ab. Die Meldung kommt je Gegenstand einmal; `/at buffs` zeigt den Zustand jederzeit.
+* Ein Flaeschchen folgt nicht auf ein eben benutztes Elixier, dessen Buff nicht zu sehen war.
 * `/at buffs ignorieren [Link]` nimmt einen Gegenstand dauerhaft aus der Auswahl (kontoweit gespeichert), `erlauben`
   holt ihn zurueck. **Gewaehlt wird aus dem, was in den Taschen liegt**: was der Charakter nicht benutzen soll,
   gehoert nicht hinein oder auf die Liste.
@@ -292,8 +354,12 @@ antwortet zusaetzlich selbst ("Using ...").
 * **Nicht im Spiel getestet.** Die Tests laufen gegen eine Attrappe der WoW-API; ob der Client `UnitBuff` mit der
   Zauberkennung als elftem Rueckgabewert liefert (3.3.5a tut es), ob der Server den Befehl im Kampf annimmt und wie
   schnell, zeigt nur das Spiel. Liefert der Client keine Zauberkennung, gilt der Name des Zaubers.
-* Das Addon weiss nicht, welche Klasse oder Rolle ein Buff nuetzt: es benutzt, was in den Taschen liegt und zur
-  erlaubten Art gehoert. Eine Magierin mit einer Schriftrolle der Staerke bekommt sie.
+* **Elixiere und Flaeschchen waehlt das Addon nach Stufe, nicht nach Klasse**: die Datenbank sagt, in welche Gruppe ein
+  Elixier gehoert, aber nicht, welchem Charakter es nuetzt (das steht in den Zauberdaten des Clients, nicht in der
+  Datenbank). Es benutzt, was in den Taschen liegt und zur erlaubten Art gehoert; ein Magier mit einem Elixier der
+  maechtigen Staerke bekommt es. Schriftrollen waehlt das Addon seit 11.7 nach Klasse (siehe oben).
+* Staerkere Buffs derselben Art, die der Bot selbst wirkt (Seelenstaerke, Arkane Brillanz, Horn des Winters), kennt das
+  Addon nicht: ein Befehl, den der Server deswegen abweist, endet in der wachsenden Sperre.
 * Nur Elixiere, Flaeschchen und Schriftrollen der Datenbank von AzerothCore. Eigene Gegenstaende des Servers fehlen;
   wer die Tabelle erneuern will: `tools/gen_consumables.py <azerothcore>` (mit `--check` zum Vergleichen).
 * Selbstmodus erforderlich (`/at botan`): ohne ihn fuehrt niemand den Befehl aus.
@@ -329,6 +395,64 @@ sodass er den Stop nicht auf der Leitung ueberholt. Gleichartige wartende Befehl
 Regler nur seinen letzten Wert meldet. Das Format der Nachrichten und die
 Versionsregeln stehen in der README von mod-autotravel (Abschnitt "Protokoll").
 Das Addon spricht Protokoll 4 und versteht auch Module mit Protokoll 3.
+
+## Aenderungen in 11.8
+
+* **Wartezeit nach dem Kampf in den Einstellungen** (*Interface -> AddOns -> AutoTravel*, Abschnitt
+  "Uebergabe an den Spieler"): der Haken *Wartezeit nach dem Kampf selbst festlegen* und ein Regler
+  (0 bis 30 s) legen sie fuer alle Profile fest; ohne Haken gilt wie bisher der Wert des Profils. Sie ist
+  der Grund, warum das Panel nach dem Kampf noch einige Sekunden auf *Kampf - du hast die Kontrolle*
+  steht: der Server bleibt so lange im Zustand "Kampf", damit der Bot looten kann (Normal, Aggressiv,
+  Plus 7 s). Bisher liess sie sich nur im Profil-Editor oder mit `.at set grace` aendern.
+* `/at wartezeit [<sekunden> | profil]`. **0 heisst sofort**: der Server liest `grace 0` als "keine
+  Vorgabe" und nimmt `AutoTravel.CombatGraceMs` (2 s); das Addon sendet deshalb 0,1 s, weniger als einen
+  Takt des Moduls (0,2 s).
+* Der eigene Wert geht sofort hinaus, mit jedem Profil und nach dem Handschlag erneut (auch ohne
+  Selbstmodus). Der Profil-Editor weist darauf hin, dass sein Wert gerade nicht gilt; der Tooltip der
+  Profilknoepfe nennt den Wert, der gilt.
+* Tests: rund 90 neue Pruefungen; 20 absichtlich eingebaute Fehler werden alle erkannt.
+* Das Protokoll aendert sich nicht.
+
+## Aenderungen in 11.7
+
+Befunde einer dritten und einer vierten, unabhaengigen Pruefung von 11.6. Jeder wurde an der Server-Quelle (AzerothCore,
+mod-playerbots) nachvollzogen, bevor etwas geaendert wurde.
+
+* **Schriftrollen sind ein einziger Platz** (`spell_group` 1087 ist "exklusiv", die sechs Werte stehen darin): bis 11.6
+  benutzte das Addon die Werte reihum, jede Rolle ersetzte die vorige, die vorige fehlte wieder und kam nach 45 s erneut
+  dran -- vier bis sechs Rollen je Kampf, mit nie mehr als einer wirkenden. Jetzt wirkt eine, der Wert richtet sich nach
+  Klasse und Talentbaum, `/at buffs wert` ueberschreibt ihn. Die Runenschriftrolle der Seelenstaerke steht nicht in der
+  Gruppe und wirkt neben einer Schriftrolle (siehe unten).
+* **Runenschriftrolle** (Fehler schon in 11.6, von der vierten Pruefung gefunden): ihr Zauber 69377 ist nur ein
+  Script (`spell_item_runescroll_of_fortitude`), der Buff auf dem Charakter ist Zauber 72590. Das Addon wartete auf
+  einen Buff, der nie erschien, und benutzte alle 10 Minuten die naechste Rolle unter dem laufenden Buff. Ausserdem
+  steht 72590 in der Gruppe der Ausdauerbuffs (Regel 4, "der staerkste gewinnt"): neben Machtwort: Seelenstaerke ist
+  die Rolle verbraucht und ihr Buff sofort weg. Jetzt fuehrt die Tabelle 72590, und die Rolle bleibt liegen, solange
+  ein Ausdauerbuff wirkt. `tools/gen_consumables.py` bricht ab, wenn ein Gegenstand einen Script-Zauber benutzt, den
+  niemand aufgeloest hat, oder ein Flaeschchen unbemerkt fehlt.
+* **Jaeger**: im Kampf geht nichts (Automatisches Schiessen zaehlt als Zauber); alles in den 25 s danach.
+* **Bewegung**: waehrend der Charakter laeuft, faellt oder zaubert (auch Kanalzauber), wird nichts gesendet; ein
+  Befehl, der durch eine solche Bewegung abgewiesen wurde, zaehlt nicht als Fehlschlag des Gegenstands.
+* **Fehlschlaege**: drei statt fuenf Versuche, "im Kampf ging es nicht" verfaellt nach 30 min, Sperren wachsen
+  (90 s, 5 min, 15 min, 1 h), jede Meldung kommt je Gegenstand einmal. Vorher: ein dauerhaft abgewiesener Gegenstand
+  erzeugte bei jedem Kampf fuenf Befehle und eine Meldung (sechs Rollen: 168 Befehle und 33 Meldungen in 30 min).
+* **Geduld**: ein Befehl gilt erst nach 7 s als abgewiesen (vorher 3,5 s); ein Zauber mit Zauberzeit im Weg
+  verzoegert die Ausfuehrung. Der Abstand zur naechsten Benutzung zaehlt ab dem Sichtbarwerden der letzten (3,1 s), weil
+  die Abklingzeit der Kategorie ab der Ausfuehrung laeuft.
+* **Verbuendeter als Ziel**: eine Schriftrolle wartet, solange im Client ein Verbuendeter ausgewaehlt ist.
+* **Belegte Plaetze**: die Gruppen 1 und 2 des Servers werden ganz gelesen (`AT.ConsGroups`): Juju, Zanza, R.O.I.D.S.,
+  Wasserwandeln u. a. belegen den Platz, ein Elixier ersetzte sie nicht mehr.
+* Ein Flaeschchen folgt nicht auf ein Elixier, dessen Buff nicht zu sehen war.
+* Ein Haken bei den Verbrauchsguetern sendet das Profil nicht mehr neu (es sind keine Strategien des Servers).
+* `/at buffs jetzt` nennt den Grund, wenn nichts geschieht (Hindernis, Mindestabstand, belegter Platz ...); `/at buffs`
+  zeigt Hindernisse und die Wahl der Schriftrolle.
+* `tools/gen_consumables.py` liest auch `spell_ranks` und bricht ab, wenn eine Schriftrolle nicht mehr in der
+  exklusiven Gruppe des Servers steht.
+* Tests: ein Modell des Servers (Ausfuehrung nach Verzoegerung, Warten hinter einem Zauber, sofortige Abweisung bei
+  Kanalzauber, Bewegung oder Fallen, Dauerzauber, Stufe, Abklingzeit der Kategorie, Verdraengung innerhalb der exklusiven
+  Gruppen, das Script der Runenschriftrolle, "der staerkste gewinnt" bei den Ausdauerbuffs) und rund 370 neue
+  Pruefungen. Absichtlich in die Logik eingebaute Fehler (rund 75 Varianten) werden alle von den Tests erkannt.
+* Das Protokoll aendert sich nicht.
 
 ## Aenderungen in 11.6
 
@@ -422,7 +546,8 @@ reagiert bzw. welche Strategien der Bot gerade hat.
 `AutoTravelDB` (je Charakter): Einstellungen, Fensterposition, aktives Profil.
 `AutoTravelGlobalDB` (kontoweit): eigene Playerbot-Profile (`custom`), deine Aenderungen
 an den vorgegebenen (`builtin`; nur Profile, die du geaendert hast) und die Gegenstaende, die du von den
-Verbrauchsguetern ausgeschlossen hast (`consIgnore`).
+Verbrauchsguetern ausgeschlossen hast (`consIgnore`), und der Schriftrollenwert, den du mit `/at buffs wert`
+fest eingestellt hast (`consStat`).
 Beim Aktualisieren aus einer aelteren Fassung bleiben alle Werte erhalten; fehlende
 neue Einstellungen erhalten Standardwerte. Der fruehere Standardbefehl
 `.playerbots bot self on/off` wird auf den heutigen Umschalter umgestellt, falls du
@@ -458,7 +583,7 @@ gibt, ersetzt aber keinen Test im Spiel.
 | `AT_Options.lua`, `AT_Profiles.lua` | Einstellungsseiten (mit Scrollbereich) |
 | `AT_Bot.lua`, `AT_Gear.lua` | Playerbot-Selbstmodus, Erbstueckschutz |
 | `AT_Consumables.lua` | Verbrauchsgueter: Taschen lesen, Buffs pruefen, `u <Link>` fluestern, Sicherungen, `/at buffs` |
-| `AT_ConsumableData.lua` | **erzeugt**: Flaeschchen, Elixiere, Schriftrollen mit Zauber und Stufe (`tools/gen_consumables.py`) |
+| `AT_ConsumableData.lua` | **erzeugt**: Flaeschchen, Elixiere, Schriftrollen mit Zauber und Stufe, dazu die ganzen Elixiergruppen des Servers (`tools/gen_consumables.py`) |
 | `AT_Carbonite.lua`, `AT_MapIds.lua` | Ziel aus Carbonite, Zonenname -> Karten-ID |
 | `Bindings.xml` | Tastenbelegung |
 

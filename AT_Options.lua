@@ -327,7 +327,13 @@ local function Build()
             end
          end
          GameTooltip:AddLine(" ")
-         GameTooltip:AddLine("Wartezeit nach dem Kampf: " .. tostring(cur.grace or 2) .. " s", 0.55, 0.6, 0.68, true)
+         local grace, custom = AT.Bot.EffectiveGrace(cur)
+         if custom then
+            GameTooltip:AddLine("Wartezeit nach dem Kampf: " .. tostring(grace) .. " s  (selbst festgelegt; das Profil hat " ..
+                                tostring(cur.grace or 2) .. " s)", 0.55, 0.6, 0.68, true)
+         else
+            GameTooltip:AddLine("Wartezeit nach dem Kampf: " .. tostring(grace) .. " s", 0.55, 0.6, 0.68, true)
+         end
       end
       table.insert(profButtons, b)
    end
@@ -393,6 +399,42 @@ local function Build()
    -- ---- Uebergabe -------------------------------------------------------
    Header(c, "Uebergabe an den Spieler", 16, y)
    Advance(28)
+
+   -- Wartezeit nach dem Kampf. Der Server bleibt nach dem Ende eines Kampfes im Zustand "Kampf", bis sie
+   -- abgelaufen ist; so lange kann der Bot looten. Das Profil bringt eine mit; hier laesst sie sich fuer alle
+   -- Profile festlegen. Den Regler anzufassen schaltet den Haken ein.
+   local function SendGrace()
+      if AT.Bot then AT.Bot.SendGrace() end
+      if AT.UI then AT.UI.Update() end
+      O.Load()
+   end
+
+   O.graceCheck = Check(c, "Wartezeit nach dem Kampf selbst festlegen",
+      "Nach einem Kampf bleibt der Autopilot noch so lange im Zustand 'Kampf', bevor die Reise weitergeht; " ..
+      "in dieser Zeit kann der Bot looten. Aus: es gilt der Wert des Profils (Normal, Aggressiv und Plus 7 s, " ..
+      "Verteidigen 2 s, Minimal und Aengstlich 1,5 s). Ein: der Wert des Reglers gilt fuer alle Profile. " ..
+      "Gilt fuer deine eigene Reise.",
+      16, y, "GraceCustom", function() SendGrace() end)
+   table.insert(widgets, O.graceCheck)
+   Advance(34)
+
+   local graceSlider = Slider(c, "Wartezeit nach dem Kampf (s)",
+      "So lange wartet der Autopilot nach dem Kampf, bevor er weiterfaehrt. 0 = sofort. Zu kurz, und er " ..
+      "laeuft los, waehrend der Bot noch lootet. Den Regler anzufassen schaltet 'selbst festlegen' ein.",
+      16, y, 0, 30, 1, "GraceSeconds",
+      function() AT.Set("GraceCustom", 1) SendGrace() end)
+   -- Solange der Haken aus ist, gilt der Wert des Profils: der Regler zeigt nur, was gelten wuerde.
+   local graceLoad = graceSlider.Load
+   graceSlider.Load = function()
+      graceLoad()
+      graceSlider:SetAlpha(AT.GetBool("GraceCustom") and 1 or 0.55)
+   end
+   table.insert(widgets, graceSlider)
+   O.graceSlider = graceSlider          -- fuer Tests
+
+   Note(c, "Aus: es gilt der Wert des Profils. 0 = sofort. Gilt fuer alle Profile, wenn der Haken gesetzt ist.",
+        290, y + 4, 270)
+   Advance(46)
 
    table.insert(widgets, Check(c, "Automatisch zurueckgeben",
       "Haelt der Autopilot an (Kampf oder ausdruecklich uebernommen), faehrt er nach einer " ..
@@ -583,6 +625,8 @@ function O.Load()
    RefreshProfiles()
    ApplyGating()
    if O.connText then O.connText:SetText(ConnectionText()) end
+   -- Der Profil-Editor zeigt, ob seine Wartezeit gerade gilt.
+   if AT.ProfileEditor and AT.ProfileEditor.RefreshGrace then AT.ProfileEditor.RefreshGrace() end
 end
 
 function O.Open()
