@@ -49,7 +49,7 @@ N.MIN_PROTOCOL = 3      -- aeltere Servermodule (3.x) sprechen dieselben Nachric
 N.state = "UNKNOWN"
 
 -- Faehigkeiten, die der Server meldet (siehe ATCapability im Servermodul).
-N.CAP = { HANDOVER = 1, ROUTE = 2, TAXI = 4, TELEPORT = 8, SETTINGS = 16, TRANSPORT = 32 }
+N.CAP = { HANDOVER = 1, ROUTE = 2, TAXI = 4, TELEPORT = 8, SETTINGS = 16, TRANSPORT = 32, WAYPOINTS = 64 }
 
 AT.server = {
    known    = false,   -- true, sobald ein Handschlag beantwortet wurde
@@ -99,6 +99,16 @@ function N.Can(capName)
 end
 
 function N.IsReady() return N.state == "READY" end
+
+-- Kennt das Servermodul Wegpunktketten (Faehigkeit 64, ab 4.0.8)? true / false, nil solange es sich nicht
+-- sagen laesst: kein Handschlag, oder das Modul fehlt, ist zu alt oder abgeschaltet -- dann gibt es dafuer
+-- eigene Meldungen. Module vor 4.0 (Protokoll 3) und Module 4.0.0 bis 4.0.7 kennen sie nicht.
+function N.SupportsWaypoints()
+   local s = AT.server
+   if N.state ~= "READY" or not s.known then return nil end
+   if (s.proto or 0) < 4 or not s.capsKnown then return false end
+   return HasBit(s.caps, N.CAP.WAYPOINTS)
+end
 
 local function WarnThrottled(text)
    local now = GetTime()

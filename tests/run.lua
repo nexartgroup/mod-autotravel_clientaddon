@@ -37,8 +37,9 @@ local function boot()
 end
 
 -- Antwort des Servers auf den Handschlag
-local CAPS_ALL      = 63    -- Uebergabe, Route, Flug, Teleport, Serveroptionen, Transport
-local CAPS_PLAYER   = 39    -- Uebergabe, Route, Flug, Transport -- kein Teleport, keine Serveroptionen
+local CAPS_ALL      = 127   -- Uebergabe, Route, Flug, Teleport, Serveroptionen, Transport, Wegpunktketten
+local CAPS_PLAYER   = 103   -- Uebergabe, Route, Flug, Transport, Wegpunktketten -- kein Teleport, keine Serveroptionen
+local CAPS_OLD      = 63    -- ein Modul vor 4.0.8: wie CAPS_ALL, aber ohne Wegpunktketten
 
 local function hello(caps, sec, proto)
    W.ServerLine(string.format("[AT]H|4.0|1|250|1|1|%d|%d|%d", proto or 4, sec or 0, caps or CAPS_ALL))
@@ -767,6 +768,881 @@ test("PackRoute: kein Punkt geht verloren, jede Nachricht bleibt im Limit", func
    eq(#AutoTravel.PackRoute({}), 0, "leere Route erzeugt keine Befehle (Start sendet nie eine)")
 end)
 
+-- ---------------------------------------------------------------------------
+-- Wegpunktketten
+-- ---------------------------------------------------------------------------
+--
+-- Verkettet der Spieler in Carbonite mehrere Ziele (Strg + Umschalt + Linksklick), sind die gesetzten
+-- Ziele Pflichtpunkte: das Servermodul laeuft sie der Reihe nach ab, statt nur zum letzten zu fahren.
+-- Wie Carbonite sie ablegt (.Tar), ist aus dem Addon allein nicht zu sehen; die Tests decken die drei
+-- Formen ab, die der Abgleich in CB.GetRoute kennt.
+
+-- Eintrag einer Carbonite-Liste; Zonenkoordinaten der Attrappe: 10 + 2 * TMX, 20 + TMY.
+local function cpt(x, y, name, mod) return { TMX = x, TMY = y, MaI = 1, TaN1 = name, Mod = mod } end
+
+local function chainCarbonite(tar, tra, player)
+   installCarbonite(1)
+   local px, py = 2, 3
+   if player then px, py = player[1], player[2] end
+   _G.Nx.Map.GeM = function()
+      return {
+         Tra1 = tra or {}, Tar = tar or {}, PlX = px, PlY = py,
+         GZP = function(self, mi, x, y) return 10 + x * 2, 20 + y end,
+      }
+   end
+   AutoTravel.MapIds.Build(true)
+end
+
+local function flags(route)
+   local out = {}
+   for i, l in ipairs(route) do out[i] = l.flag end
+   return table.concat(out, ",")
+end
+
+local function lastMessage(pattern)
+   for i = #W.messages, 1, -1 do
+      if W.messages[i]:find(pattern, 1, true) then return W.messages[i] end
+   end
+   return nil
+end
+
+test("Wegpunktkette: besteht die Route nur aus den gesetzten Zielen, sind alle Wegpunkte", function()
+   ready()
+   chainCarbonite({ cpt(10, 10, "Eins"), cpt(20, 30, "Zwei"), cpt(30, 15, "Drei") }, {})
+   local route, how = AutoTravel.BuildRoute()
+   check(route ~= nil and #route == 3, "drei Punkte")
+   eq(how, "ziele", "erkannt als: die Route sind die Ziele")
+   eq(flags(route), "2,2,2", "alle drei sind Wegpunkte")
+   eq(AutoTravel.CountWaypoints(route), 3, "drei Wegpunkte")
+   eq(route[3].name, "Drei", "das Endziel traegt seinen Namen")
+   local cmds = AutoTravel.PackRoute(route)
+   local tokens = 0
+   for _, c in ipairs(cmds) do for _ in c:gmatch("%d+:%d%.%d+:%d%.%d+:2") do tokens = tokens + 1 end end
+   eq(tokens, 3, "die Art 2 geht im Befehl hinaus")
+end)
+
+test("Wegpunktkette: die gesetzten Ziele werden in der berechneten Route wiedergefunden", function()
+   ready()
+   local tar = { cpt(10, 10, "A"), cpt(20, 30, "B"), cpt(30, 15, "C") }
+   local tra = { cpt(2, 3, "Start"), cpt(5, 5, "Tor"), cpt(10, 10, "A"), cpt(15, 20, "Bruecke"),
+                 cpt(20, 30, "B"), cpt(25, 25, "Pass"), cpt(30, 15, "C") }
+   chainCarbonite(tar, tra)
+   local route, how = AutoTravel.BuildRoute()
+   eq(#route, 7, "alle Punkte der Route bleiben (Stuetzpunkte dienen dem Rueckfall)")
+   eq(how, "abgleich", "erkannt durch Abgleich mit der Route")
+   eq(flags(route), "0,0,2,0,2,0,2", "nur die gesetzten Ziele sind Wegpunkte")
+   eq(AutoTravel.CountWaypoints(route), 3, "drei Wegpunkte")
+
+   -- Die Reihenfolge der Route zaehlt, nicht die der Liste .Tar
+   chainCarbonite({ tar[3], tar[2], tar[1] }, tra)
+   route, how = AutoTravel.BuildRoute()
+   eq(how, "abgleich", "auch mit umgekehrter Liste")
+   eq(flags(route), "0,0,2,0,2,0,2", "dieselben Markierungen: die Route bestimmt die Reihenfolge")
+
+   -- Kleine Abweichungen (eine Carbonite-Einheit sind rund 4,6 yd) zaehlen noch als derselbe Punkt
+   chainCarbonite({ cpt(10.6, 10.4, "A"), cpt(19.5, 30.6, "B"), cpt(30, 15, "C") }, tra)
+   route, how = AutoTravel.BuildRoute()
+   eq(how, "abgleich", "gleiche Punkte mit kleiner Abweichung")
+   eq(flags(route), "0,0,2,0,2,0,2", "dieselben Markierungen")
+end)
+
+test("Wegpunktkette: kennt die Route nicht alle Ziele, gilt die Kette der gesetzten Ziele", function()
+   ready()
+   -- Tra1 fuehrt nur zum ersten Ziel (oder gehoert zu etwas anderem): kein Abgleich moeglich
+   local tar = { cpt(10, 10, "A"), cpt(20, 30, "B"), cpt(30, 15, "C") }
+   chainCarbonite(tar, { cpt(2, 3, "Start"), cpt(5, 5, "Tor"), cpt(10, 10, "A") })
+   local route, how = AutoTravel.BuildRoute()
+   eq(how, "route", "erkannt als: die Kette der Ziele allein")
+   eq(#route, 3, "genau die drei Ziele")
+   eq(flags(route), "2,2,2", "alle sind Wegpunkte")
+   eq(route[1].name, "A", "in der Reihenfolge von .Tar")
+   eq(route[3].name, "C", "das letzte Ziel zuletzt")
+end)
+
+test("Wegpunktkette: der Abgleich verlangt dieselbe Karte, beide Koordinaten und einen eigenen Punkt je Ziel", function()
+   ready()
+   local tar = { cpt(10, 10, "A"), cpt(30, 15, "B") }
+
+   -- dieselben Koordinaten auf einer ANDEREN Karte sind nicht dieselben Punkte
+   local other = {}
+   for _, e in ipairs(tar) do other[#other + 1] = { TMX = e.TMX, TMY = e.TMY, MaI = 2, TaN1 = e.TaN1 } end
+   chainCarbonite(tar, other)
+   local legs, how = AutoTravel.Carb.GetRoute()
+   eq(how, "route", "andere Karte: kein Treffer, die Kette der Ziele gilt")
+   eq(#legs, 2, "genau die zwei Ziele")
+   eq(legs[1].mapIndex, 1, "und auf der Karte der Ziele")
+
+   -- gleiches x, aber weit entfernt in y
+   chainCarbonite(tar, { cpt(10, 40, "A"), cpt(30, 40, "B") })
+   legs, how = AutoTravel.Carb.GetRoute()
+   eq(how, "route", "gleiches x, anderes y: kein Treffer")
+
+   -- gleiches y, aber weit entfernt in x
+   chainCarbonite(tar, { cpt(40, 10, "A"), cpt(40, 15, "B") })
+   legs, how = AutoTravel.Carb.GetRoute()
+   eq(how, "route", "gleiches y, anderes x: kein Treffer")
+
+   -- Zwei Ziele dicht beieinander, aber nur ein Routenpunkt dort: jedes Ziel braucht seinen eigenen
+   -- Punkt, sonst wuerde aus zwei Wegpunkten still einer
+   chainCarbonite({ cpt(10, 10, "A"), cpt(10.5, 10.5, "A2"), cpt(30, 15, "B") },
+                  { cpt(2, 3, "Start"), cpt(10, 10, "A"), cpt(30, 15, "B") })
+   legs, how = AutoTravel.Carb.GetRoute()
+   eq(how, "route", "zwei Ziele, ein Punkt: Rueckfall auf die Kette der Ziele")
+   eq(#legs, 3, "alle drei Ziele bleiben")
+   local route = AutoTravel.BuildRoute()
+   eq(AutoTravel.CountWaypoints(route), 3, "drei Wegpunkte")
+end)
+
+test("Einzelziel bleibt, was es war: keine Wegpunkte, die Route wie bisher", function()
+   ready()
+   local tra = { cpt(2, 3, "Start"), cpt(5, 5, "Tor"), cpt(30, 15, "Ziel") }
+   chainCarbonite({ cpt(30, 15, "Ziel") }, tra)
+   local route, how = AutoTravel.BuildRoute()
+   eq(how, "einzel", "ein einziges gesetztes Ziel")
+   eq(flags(route), "0,0,0", "keine Markierung")
+   eq(AutoTravel.CountWaypoints(route), 1, "nur das Endziel")
+
+   chainCarbonite({}, tra)
+   route, how = AutoTravel.BuildRoute()
+   eq(how, "einzel", "gar keine gesetzten Ziele (.Tar leer)")
+   eq(flags(route), "0,0,0", "keine Markierung")
+
+   -- ... und Tar ohne Koordinaten (Carbonite legt etwas anderes ab) aendert nichts
+   chainCarbonite({ { Foo = 1 }, { Foo = 2 } }, tra)
+   route, how = AutoTravel.BuildRoute()
+   eq(how, "einzel", "Eintraege ohne Koordinaten zaehlen nicht")
+   eq(flags(route), "0,0,0", "keine Markierung")
+
+   -- ... auch nicht, wenn .Tar etwas anderes als eine Liste ist
+   chainCarbonite("nichts", tra)
+   route, how = AutoTravel.BuildRoute()
+   eq(how, "einzel", ".Tar ist keine Liste")
+   chainCarbonite({ 5, "x", true }, tra)
+   route, how = AutoTravel.BuildRoute()
+   eq(how, "einzel", ".Tar enthaelt keine Tabellen")
+   check(route ~= nil and #route == 3, "und die Route bleibt unberuehrt")
+   chainCarbonite(5, tra)
+   route, how = AutoTravel.BuildRoute()
+   eq(how, "einzel", ".Tar ist eine Zahl")
+   chainCarbonite(true, tra)
+   route, how = AutoTravel.BuildRoute()
+   eq(how, "einzel", ".Tar ist ein Wahrheitswert")
+   check(route ~= nil and #route == 3, "die Route bleibt unberuehrt")
+end)
+
+test("Einzelziel ohne Route (nur .Tar mit einem Ziel) bleibt ein Einzelziel", function()
+   ready()
+   chainCarbonite({ cpt(30, 15, "Ziel") }, {})
+   local route, how = AutoTravel.BuildRoute()
+   eq(how, "einzel", "ein Ziel")
+   eq(#route, 1, "ein Punkt")
+   eq(flags(route), "0", "ohne Markierung")
+end)
+
+test("Wegpunktkette: Flugpunkte sind nie Wegpunkte und behalten ihre Art", function()
+   ready()
+   local tar = { cpt(10, 10, "A"), cpt(30, 15, "B") }
+   local tra = { cpt(2, 3, "Start"), cpt(4, 4, "Flug von", "F"), cpt(8, 9, "Flug nach", "F"),
+                 cpt(10, 10, "A"), cpt(30, 15, "B") }
+   chainCarbonite(tar, tra)
+   local route, how = AutoTravel.BuildRoute()
+   eq(how, "abgleich", "erkannt")
+   eq(flags(route), "0,1,1,2,2", "Flugpunkte 1, Wegpunkte 2")
+   eq(AutoTravel.CountWaypoints(route), 2, "zwei Wegpunkte")
+
+   -- Eintraege der berechneten Route ohne Mod, aber mit "Flug" im Namen, gelten weiter als Flugpunkte
+   chainCarbonite({ cpt(10, 10, "A"), cpt(30, 15, "B") },
+                  { cpt(2, 3, "Start"), cpt(4, 4, "Flugpunkt Sturmwind"), cpt(10, 10, "A"), cpt(30, 15, "B") })
+   route = AutoTravel.BuildRoute()
+   eq(flags(route), "0,1,2,2", "Name mit 'Flug' ohne Mod: Flugpunkt")
+
+   -- Liegt ein gesetztes Ziel auf einem Flugpunkt, findet es dort keinen Platz: die Kette der Ziele gilt
+   chainCarbonite({ cpt(4, 4, "Flugmeister"), cpt(30, 15, "B") }, tra)
+   route, how = AutoTravel.BuildRoute()
+   eq(how, "route", "Rueckfall auf die Kette der Ziele")
+   eq(flags(route), "2,2", "beide sind Wegpunkte")
+end)
+
+test("Wegpunkt auf einem Stuetzpunkt: die Lage des Wegpunkts bleibt, die Markierung geht nie verloren", function()
+   ready()
+   -- Stuetzpunkt, dann ein Wegpunkt praktisch an derselben Stelle
+   local tra = { cpt(2, 3, "Start"), cpt(10, 10, "Tor"), cpt(10.001, 10.001, "A"), cpt(30, 15, "B") }
+   chainCarbonite({ cpt(10.001, 10.001, "A"), cpt(30, 15, "B") }, tra)
+   local route = AutoTravel.BuildRoute()
+   eq(#route, 3, "Tor und A zusammengefasst")
+   eq(flags(route), "0,2,2", "der gemeinsame Punkt ist ein Wegpunkt")
+   check(math.abs(route[2].nx - (10 + 10.001 * 2) / 100) < 1e-9, "und liegt dort, wo der Wegpunkt liegt")
+
+   -- Wegpunkt zuerst, danach ein Stuetzpunkt darauf: der Wegpunkt bleibt unveraendert
+   tra = { cpt(2, 3, "Start"), cpt(10, 10, "A"), cpt(10.001, 10.001, "Tor"), cpt(30, 15, "B") }
+   chainCarbonite({ cpt(10, 10, "A"), cpt(30, 15, "B") }, tra)
+   route = AutoTravel.BuildRoute()
+   eq(#route, 3, "A und Tor zusammengefasst")
+   eq(flags(route), "0,2,2", "Wegpunkt bleibt Wegpunkt")
+   check(math.abs(route[2].nx - (10 + 10 * 2) / 100) < 1e-9, "und behaelt seine Lage")
+
+   -- zwei Wegpunkte auf einer Stelle werden einer
+   chainCarbonite({ cpt(10, 10, "A"), cpt(10.001, 10.001, "A2"), cpt(30, 15, "B") }, {})
+   route = AutoTravel.BuildRoute()
+   eq(#route, 2, "zwei Wegpunkte auf einer Stelle: einer")
+   eq(flags(route), "2,2", "beide Markierungen bleiben")
+   eq(AutoTravel.CountWaypoints(route), 2, "zwei Wegpunkte")
+   check(math.abs(route[1].nx - (10 + 10 * 2) / 100) < 1e-9, "der erste Wegpunkt behaelt seine Lage")
+end)
+
+test("Wegpunktkette: das Ausduennen langer Routen behaelt alle Wegpunkte", function()
+   ready()
+   local tra = {}
+   for i = 1, 40 do tra[#tra + 1] = cpt(i, i, "P" .. i) end
+   tra[35].Mod, tra[36].Mod = "F", "F"                    -- ein Flug zwischen P35 und P36 (nahe dem Ende: dort duennt das Ausduennen zuerst)
+   local tar = { tra[10], tra[20], tra[30], tra[40] }
+   chainCarbonite(tar, tra)
+   local route, how = AutoTravel.BuildRoute()
+   eq(how, "abgleich", "erkannt")
+   check(#route <= 24, "auf hoechstens 24 Punkte ausgeduennt: " .. #route)
+   eq(AutoTravel.CountWaypoints(route), 4, "alle vier Wegpunkte (drei und das Endziel) bleiben")
+   local taxi = 0
+   for _, l in ipairs(route) do if AutoTravel.HasLegFlag(l.flag, 1) then taxi = taxi + 1 end end
+   eq(taxi, 2, "beide Flugpunkte bleiben")
+   eq(route[#route].name, "P40", "das Endziel bleibt")
+   eq(route[1].name, "P1", "der Anfang bleibt")
+   local names = {}
+   for _, l in ipairs(route) do names[l.name] = true end
+   check(names.P10 and names.P20 and names.P30 and names.P40, "P10, P20, P30 und P40 sind noch da")
+end)
+
+test("Wegpunktkette: mehr Punkte, als der Server annimmt, kosten Zwischenziele, nie das Endziel", function()
+   ready()
+   local tar = {}
+   for i = 1, 40 do tar[#tar + 1] = cpt(i, i, "W" .. i) end
+   chainCarbonite(tar, {})
+   local msgs0 = #W.messages
+   local route = AutoTravel.BuildRoute()
+   eq(#route, 30, "hoechstens 30 Punkte (der Server nimmt 32)")
+   eq(route[#route].name, "W40", "das Endziel bleibt der letzte Punkt")
+   eq(route[1].name, "W1", "die ersten Wegpunkte bleiben")
+   eq(route[29].name, "W29", "bis Wegpunkt 29")
+   local warned = false
+   for i = msgs0 + 1, #W.messages do
+      if W.messages[i]:find("40 Punkte", 1, true) then warned = true end
+   end
+   check(warned, "Hinweis auf die gekuerzte Kette")
+end)
+
+test("Betriebsart 'alle': jeden Punkt der Route einzeln anlaufen", function()
+   ready()
+   -- der erste Punkt liegt auf dem Spieler (PlX/PlY = 2/3): er ist der Start, kein Ziel
+   local tra = { cpt(2, 3, "Start"), cpt(5, 5, "Tor"), cpt(8, 9, "Flug", "F"), cpt(30, 15, "Ziel") }
+   chainCarbonite({}, tra)
+   local route, how = AutoTravel.BuildRoute()
+   eq(how, "einzel", "Standard: nur das Ziel")
+   eq(flags(route), "0,0,1,0", "keine Wegpunkte")
+
+   AutoTravel.Set("WaypointMode", "alle")
+   route, how = AutoTravel.BuildRoute()
+   eq(how, "alle", "mit der Betriebsart")
+   eq(flags(route), "0,2,1,2", "Start und Flugpunkt ausgenommen, Tor und Ziel sind Wegpunkte")
+   eq(AutoTravel.CountWaypoints(route), 2, "zwei Wegpunkte")
+
+   -- Nur der ERSTE Punkt kann der Start sein: kehrt die Route spaeter an die Stelle des Spielers
+   -- zurueck, ist das ein Ziel
+   chainCarbonite({}, { cpt(2, 3, "Start"), cpt(5, 5, "Tor"), cpt(2, 3, "Rueckkehr"), cpt(30, 15, "Ziel") })
+   route = AutoTravel.BuildRoute()
+   eq(flags(route), "0,2,2,2", "Rueckkehr zur Startstelle ist ein Wegpunkt")
+
+   -- Liegt der erste Punkt NICHT auf dem Spieler, ist er ein gewoehnlicher Wegpunkt
+   chainCarbonite({}, tra, { 20, 20 })
+   route = AutoTravel.BuildRoute()
+   eq(flags(route), "2,2,1,2", "Start abseits des Spielers zaehlt als Ziel")
+
+   -- Kennt Carbonite die Spielerlage nicht (PlX/PlY fehlen), gibt es keinen Start zu erkennen
+   chainCarbonite({}, tra)
+   local base = _G.Nx.Map.GeM
+   _G.Nx.Map.GeM = function() local m = base() m.PlX, m.PlY = nil, nil return m end
+   route = AutoTravel.BuildRoute()
+   eq(flags(route), "2,2,1,2", "ohne Spielerlage zaehlt auch der erste Punkt")
+
+   -- ohne berechnete Route (nur .Tar) gilt dasselbe: jedes gesetzte Ziel ist ein Wegpunkt
+   chainCarbonite({ cpt(10, 10, "A"), cpt(30, 15, "B") }, {})
+   route, how = AutoTravel.BuildRoute()
+   eq(how, "alle", "Route aus .Tar")
+   eq(flags(route), "2,2", "beide Ziele sind Wegpunkte")
+
+   -- ... auch ein einzelnes: die Betriebsart 'alle' macht aus dem Endziel keinen Sonderfall
+   chainCarbonite({ cpt(10, 10, "A") }, {})
+   route = AutoTravel.BuildRoute()
+   eq(flags(route), "2", "ein einzelnes Ziel ist in dieser Betriebsart markiert")
+   eq(AutoTravel.CountWaypoints(route), 1, "zaehlt aber nur als Endziel")
+
+   AutoTravel.Set("WaypointMode", "ziele")
+   chainCarbonite({}, tra)
+   route, how = AutoTravel.BuildRoute()
+   eq(how, "einzel", "wieder die Ziele")
+end)
+
+test("Betriebsart 'aus': nur das letzte Ziel zaehlt, die Route wie bis 11.8", function()
+   ready()
+   local tar = { cpt(10, 10, "A"), cpt(20, 30, "B"), cpt(30, 15, "C") }
+   local tra = { cpt(2, 3, "Start"), cpt(5, 5, "Tor"), cpt(10, 10, "A"), cpt(20, 30, "B"), cpt(30, 15, "C") }
+   chainCarbonite(tar, tra)
+   AutoTravel.Set("WaypointMode", "aus")
+   local route, how = AutoTravel.BuildRoute()
+   eq(how, "aus", "ausgeschaltet")
+   eq(flags(route), "0,0,0,0,0", "keine Markierung")
+   eq(#route, 5, "alle Punkte der Route")
+   eq(AutoTravel.CountWaypoints(route), 1, "nur das Endziel")
+
+   -- ... auch ohne berechnete Route: die Ziele sind dann gewoehnliche Stuetzpunkte
+   chainCarbonite(tar, {})
+   route, how = AutoTravel.BuildRoute()
+   eq(flags(route), "0,0,0", "Ziele ohne Markierung")
+   eq(how, "aus", "ausgeschaltet")
+
+   -- Aus liest .Tar wie bis 11.8, mit der Namensregel fuer Flugpunkte (in 'ziele' ist ein gesetztes Ziel nie ein Flugpunkt)
+   chainCarbonite({ cpt(10, 10, "Flugmeister Bob"), cpt(30, 15, "Ziel") }, {})
+   route = AutoTravel.BuildRoute()
+   eq(flags(route), "1,0", "aus: Name mit 'Flug' gilt als Flugpunkt, wie bisher")
+   AutoTravel.Set("WaypointMode", "ziele")
+   route = AutoTravel.BuildRoute()
+   eq(flags(route), "2,2", "ziele: ein gesetztes Ziel ist nie ein Flugpunkt")
+
+   -- ein unbekannter gespeicherter Wert gilt als Standard
+   AutoTravel.Set("WaypointMode", "kaputt")
+   eq(AutoTravel.WaypointMode(), "ziele", "unbekannter Wert")
+   AutoTravel.Set("WaypointMode", nil)
+   eq(AutoTravel.WaypointMode(), "ziele", "fehlender Wert")
+   AutoTravel.Set("WaypointMode", "ziele")
+end)
+
+test("/at wegpunkte schaltet die Betriebsart und meldet den Stand", function()
+   ready()
+   eq(AutoTravel.WaypointMode(), "ziele", "Standard: verkettete Ziele")
+   SlashCmdList["AUTOTRAVEL"]("wegpunkte alle")
+   eq(AutoTravel.WaypointMode(), "alle", "alle")
+   check(lastMessage("JEDER Punkt") ~= nil, "Meldung nennt den Stand")
+   SlashCmdList["AUTOTRAVEL"]("wegpunkte aus")
+   eq(AutoTravel.WaypointMode(), "aus", "aus")
+   check(lastMessage("Wegpunkte: aus") ~= nil, "Meldung nennt den Stand")
+   SlashCmdList["AUTOTRAVEL"]("wegpunkte ziele")
+   eq(AutoTravel.WaypointMode(), "ziele", "wieder die Ziele")
+   SlashCmdList["AUTOTRAVEL"]("wegpunkte quatsch")
+   eq(AutoTravel.WaypointMode(), "ziele", "Unsinn aendert nichts")
+   check(lastMessage("Verwendung") ~= nil, "Hinweis zur Verwendung")
+   SlashCmdList["AUTOTRAVEL"]("wegpunkte alle")
+   SlashCmdList["AUTOTRAVEL"]("wegpunkte")
+   eq(AutoTravel.WaypointMode(), "alle", "ohne Angabe nur Anzeige")
+   SlashCmdList["AUTOTRAVEL"]("wegpunkte ziele")
+
+   -- Der Knopf auf der Optionsseite zeigt die Betriebsart und schaltet reihum
+   local b = AutoTravel.Options.waypointButton
+   AutoTravel.Options.Load()
+   eq(b.label:GetText(), "Wegpunkte: verkettete Ziele", "Beschriftung: ziele")
+   b.__scripts.OnClick(b)
+   eq(AutoTravel.WaypointMode(), "alle", "Klick: alle")
+   eq(b.label:GetText(), "Wegpunkte: jeder Routenpunkt", "Beschriftung: alle")
+   b.__scripts.OnClick(b)
+   eq(AutoTravel.WaypointMode(), "aus", "Klick: aus")
+   eq(b.label:GetText(), "Wegpunkte: aus", "Beschriftung: aus")
+   b.__scripts.OnClick(b)
+   eq(AutoTravel.WaypointMode(), "ziele", "Klick: wieder ziele")
+
+   -- der Befehl aktualisiert den Knopf
+   SlashCmdList["AUTOTRAVEL"]("wegpunkte aus")
+   eq(b.label:GetText(), "Wegpunkte: aus", "Knopf folgt dem Befehl")
+   SlashCmdList["AUTOTRAVEL"]("wegpunkte ziele")
+end)
+
+test("Wegpunktkette: .at route traegt die Art 2, rstart folgt, und die Anzeige zaehlt Wegpunkte", function()
+   ready(CAPS_ALL)
+   local tar = { cpt(10, 10, "A"), cpt(20, 30, "B"), cpt(30, 15, "Ziel") }
+   local tra = { cpt(2, 3, "Start"), cpt(5, 5, "Tor"), tar[1], cpt(15, 20, "Bruecke"), tar[2], tar[3] }
+   chainCarbonite(tar, tra)
+   local msgs0 = #W.messages
+   AutoTravel.Start()
+   W.Advance(6)
+   local cmds = W.SentCommands()
+   local joined, rstart = "", false
+   for _, c in ipairs(cmds) do
+      if c:sub(1, 10) == ".at route " then joined = joined .. " " .. c end
+      if c:sub(1, 10) == ".at rstart" then rstart = true end
+   end
+   local twos, zeros = 0, 0
+   for tok in joined:gmatch("%d+:%d%.%d+:%d%.%d+:(%d)") do
+      if tok == "2" then twos = twos + 1 elseif tok == "0" then zeros = zeros + 1 end
+   end
+   eq(twos, 3, "drei Wegpunkte gesendet")
+   eq(zeros, 3, "drei gewoehnliche Stuetzpunkte")
+   check(rstart, "rstart gesendet")
+   eq(count(".at start"), 0, "kein Einzelziel-Start")
+   eq(AutoTravel.chainTotal, 3, "das Addon merkt sich die Zahl der Wegpunkte")
+
+   -- Panel: der Server zaehlt die Wegpunkte (Etappe 2 von 3), das Panel nennt sie so
+   status("STARTING|120|Ziel|8|10|0|1|3|0")
+   status("TRAVELING|120|Ziel|8|10|0|2|3|40")
+   eq(_G.AutoTravelPanel.lLeg:GetText(), "Wegpunkt 2/3", "Anzeige als Wegpunkt")
+
+   -- Die Warnung vor einem alten Modul kommt mit der Annahme des Starts (siehe weiter unten): hier ist sie
+   -- nach der ersten Statuszeile fuer ein Modul mit Wegpunktketten ausgeblieben.
+   local warned = false
+   for i = msgs0 + 1, #W.messages do
+      if W.messages[i]:find("Wegpunktketten", 1, true) then warned = true end
+   end
+   check(not warned, "ein Modul mit Wegpunktketten bekommt keine Warnung")
+
+   -- Eine einfache Reise zaehlt weiter Etappen
+   AutoTravel.Stop()
+   W.Advance(1)
+   chainCarbonite({}, { cpt(2, 3, "Start"), cpt(5, 5, "Tor"), cpt(30, 15, "Ziel") })
+   AutoTravel.Start()
+   W.Advance(6)
+   eq(AutoTravel.chainTotal, 0, "keine Kette")
+   status("TRAVELING|120|Ziel|8|10|0|2|3|40")
+   eq(_G.AutoTravelPanel.lLeg:GetText(), "Etappe 2/3", "Anzeige als Etappe")
+end)
+
+test("Panel: eine veraltete Kettengroesse beschriftet eine fremde Reise nicht falsch", function()
+   ready(CAPS_ALL)
+   AutoTravel.active = true
+   AutoTravel.chainTotal = 3                              -- Rest einer frueheren Kette
+   status("TRAVELING|120|Ziel|8|10|0|2|7|40")
+   eq(_G.AutoTravelPanel.lLeg:GetText(), "Etappe 2/7", "der Server meldet 7 Etappen: das sind keine drei Wegpunkte")
+   status("TRAVELING|120|Ziel|8|10|0|2|3|40")
+   eq(_G.AutoTravelPanel.lLeg:GetText(), "Wegpunkt 2/3", "bei gleicher Zahl ist es die Kette")
+   AutoTravel.chainTotal = 0
+   status("TRAVELING|120|Ziel|8|10|0|2|3|40")
+   eq(_G.AutoTravelPanel.lLeg:GetText(), "Etappe 2/3", "ohne Kette immer Etappe")
+end)
+
+test("Wegpunktkette: die Fehlersuchzeile zaehlt Flug- und Wegpunkte getrennt", function()
+   ready(CAPS_ALL)
+   AutoTravel.Set("Debug", 1)
+   local tar = { cpt(10, 10, "A"), cpt(30, 15, "B") }
+   chainCarbonite(tar, { cpt(2, 3, "Start"), cpt(4, 4, "Flug", "F"), cpt(10, 10, "A"), cpt(30, 15, "B") })
+   local msgs0 = #W.messages
+   AutoTravel.Start()
+   W.Advance(6)
+   local line
+   for i = msgs0 + 1, #W.messages do
+      if W.messages[i]:find("Route mit", 1, true) then line = W.messages[i] end
+   end
+   check(line ~= nil, "Zeile vorhanden")
+   check(line and line:find("4 Stuetzpunkten, davon 1 Flugpunkte und 2 Wegpunkte", 1, true) ~= nil,
+         "ein Flugpunkt und zwei Wegpunkte, nicht die Summe der Art-Felder: " .. tostring(line))
+   AutoTravel.Set("Debug", 0)
+end)
+
+-- Wie oft eine Zeile mit der Warnung vor einem Modul ohne Wegpunktketten seit 'from' im Chat stand
+local function chainWarnings(from)
+   local n = 0
+   for i = from + 1, #W.messages do
+      if W.messages[i]:find("Wegpunktketten", 1, true) then n = n + 1 end
+   end
+   return n
+end
+
+test("Wegpunktkette: ein Modul vor 4.0.8 wird gewarnt, sobald es den Start angenommen hat; die Reise geht trotzdem hinaus", function()
+   ready(CAPS_OLD)
+   chainCarbonite({ cpt(10, 10, "A"), cpt(30, 15, "Ziel") }, {})
+   local msgs0 = #W.messages
+   AutoTravel.Start()
+   W.Advance(6)
+   check(count(".at rstart") >= 1, "die Route geht trotzdem hinaus (das Modul faehrt dann wie bisher)")
+   eq(chainWarnings(msgs0), 0, "vor der Antwort des Servers noch keine Warnung: der Start koennte abgelehnt werden")
+
+   status("TRAVELING|300|Ziel|8|20|0|1|1|10")
+   eq(chainWarnings(msgs0), 1, "Warnung: das Modul faehrt nur zum letzten Punkt")
+   status("TRAVELING|290|Ziel|8|20|0|1|1|14")
+   status("TRAVELING|280|Ziel|8|20|0|1|1|18")
+   eq(chainWarnings(msgs0), 1, "weitere Statuszeilen warnen nicht erneut")
+end)
+
+test("Wegpunktkette: eine Absage des Servers loest die Warnung vor dem alten Modul nicht aus", function()
+   ready(CAPS_OLD)
+   chainCarbonite({ cpt(10, 10, "A"), cpt(30, 15, "Ziel") }, {})
+   local msgs0 = #W.messages
+   AutoTravel.Start()
+   W.Advance(1)
+   -- Absage: Textmeldung und Zustand IDLE, nie ein aktiver Zustand
+   W.ServerLine("[AT]M|Das Ziel liegt auf einer anderen Karte, und AutoTravel findet keine Verbindung dorthin.")
+   status("IDLE|0|-|0|0|0|0|0|0")
+   eq(chainWarnings(msgs0), 0, "keine Warnung bei einer Absage")
+   eq(AutoTravel.active, false, "keine Reise")
+end)
+
+test("Wegpunktkette: die Warnung vor einem alten Modul kommt nur, wenn das Addon es sicher weiss", function()
+   -- true, wenn BeginTripSupport bei diesem Stand des Servermoduls warnt
+   local function warnsAt(setup)
+      boot()
+      W.Advance(3)
+      setup()
+      AutoTravel.chainTotal = 3
+      local msgs0 = #W.messages
+      AutoTravel.BeginTripSupport()
+      return chainWarnings(msgs0) == 1
+   end
+   check(not warnsAt(function() end), "Handschlag noch offen (Stand unbekannt): das Addon schweigt")
+   check(not warnsAt(function() W.Advance(5.5) W.Advance(5.5) end), "kein Modul (ABSENT): dafuer gibt es eigene Meldungen")
+   check(not warnsAt(function() W.ServerLine("[AT]H|4.0|0|0|0|0|4|0|0") end), "serverseitig abgeschaltet (DISABLED)")
+   check(not warnsAt(function() W.ServerLine("[AT]H|1.0|1|0|0|0|2|0|0") end), "Modul zu alt fuer das Addon (INCOMPATIBLE)")
+   check(not warnsAt(function() hello(CAPS_ALL) end), "Modul mit allen Faehigkeiten")
+   check(not warnsAt(function() hello(CAPS_PLAYER) end), "Modul fuer Spieler (Wegpunktketten ohne Teleport)")
+   check(warnsAt(function() hello(CAPS_OLD) end), "Protokoll 4 ohne Bit 64: das Modul kennt keine Wegpunktketten")
+   check(warnsAt(function() W.ServerLine("[AT]H|3.2|1|250|1|1") end), "Protokoll 3 ohne Faehigkeitsfeld")
+
+   -- Ohne Kette (weniger als zwei Pflichtpunkte) gibt es nichts zu warnen
+   boot()
+   W.Advance(3)
+   hello(CAPS_OLD)
+   for _, total in ipairs({ 0, 1 }) do
+      AutoTravel.chainTotal = total
+      local msgs0 = #W.messages
+      AutoTravel.BeginTripSupport()
+      eq(chainWarnings(msgs0), 0, "keine Kette (" .. total .. " Wegpunkte): keine Warnung")
+   end
+   AutoTravel.chainTotal = nil
+   local msgs0 = #W.messages
+   AutoTravel.BeginTripSupport()
+   eq(chainWarnings(msgs0), 0, "ohne gemerkte Kettengroesse: keine Warnung")
+end)
+
+test("Net.SupportsWaypoints: unbekannt ohne Wissen, nein bei alten Modulen, ja mit Bit 64", function()
+   local function after(setup)
+      boot()
+      W.Advance(3)
+      setup()
+      return AutoTravel.Net.SupportsWaypoints()
+   end
+   eq(after(function() end), nil, "Handschlag offen")
+   eq(after(function() W.Advance(5.5) W.Advance(5.5) end), nil, "kein Modul")
+   eq(after(function() W.ServerLine("[AT]H|4.0|0|0|0|0|4|0|0") end), nil, "abgeschaltet")
+   eq(after(function() W.ServerLine("[AT]H|1.0|1|0|0|0|2|0|0") end), nil, "zu alt fuer das Addon")
+   eq(after(function() hello(CAPS_ALL) end), true, "alle Faehigkeiten")
+   eq(after(function() hello(CAPS_PLAYER) end), true, "Spielerrechte")
+   eq(after(function() hello(CAPS_OLD) end), false, "ohne Bit 64")
+   eq(after(function() W.ServerLine("[AT]H|3.2|1|250|1|1") end), false, "Protokoll 3 ohne Faehigkeitsfeld")
+   eq(after(function() hello(127, 0, 3) end), false, "Protokoll 3 kennt keine Wegpunktketten, auch wenn ein Feld da ist")
+end)
+
+test("/at info nennt die Wegpunktketten als Faehigkeit des Servermoduls", function()
+   local function infoText()
+      local msgs0 = #W.messages
+      SlashCmdList["AUTOTRAVEL"]("info")
+      local lines = {}
+      for i = msgs0 + 1, #W.messages do lines[#lines + 1] = W.messages[i] end
+      return table.concat(lines, "\n")
+   end
+   ready(CAPS_ALL)
+   local text = infoText()
+   check(text:find("+Wegpunktketten", 1, true) ~= nil, "Modul mit Bit 64: +Wegpunktketten")
+   check(text:find("-Wegpunktketten", 1, true) == nil, "und nicht zugleich -Wegpunktketten")
+
+   ready(CAPS_OLD)
+   text = infoText()
+   check(text:find("-Wegpunktketten", 1, true) ~= nil, "Modul vor 4.0.8: -Wegpunktketten")
+   check(text:find("+Wegpunktketten", 1, true) == nil, "und nicht zugleich +Wegpunktketten")
+   check(text:find("+Route", 1, true) ~= nil, "die uebrigen Faehigkeiten bleiben")
+
+   -- Ein Modul ohne Faehigkeitsfeld laesst die Knoepfe frei, kennt aber sicher keine Wegpunktketten
+   boot()
+   W.Advance(3)
+   W.ServerLine("[AT]H|3.2|1|250|1|1")
+   text = infoText()
+   check(text:find("-Wegpunktketten", 1, true) ~= nil, "Protokoll 3: -Wegpunktketten")
+   check(text:find("+Route", 1, true) ~= nil, "bei unbekannten Faehigkeiten bleiben die Knoepfe frei")
+end)
+
+-- ---------------------------------------------------------------------------
+-- Wegpunktketten: Randfaelle der Zuordnung, seltsame Daten, Name und Zielpunkt der Route
+-- ---------------------------------------------------------------------------
+
+test("Wegpunktkette: Wegpunkte ausserhalb jeder Zone oder auf unbekannter Karte werden gemeldet und uebersprungen", function()
+   ready()
+   -- B liegt weit ausserhalb der Zone (Zonenkoordinate 130), C auf einer Karte ohne Namen
+   local c = cpt(20, 30, "C unbekannt")
+   c.MaI = 9
+   chainCarbonite({ cpt(10, 10, "A"), cpt(60, 15, "B weit weg"), c, cpt(30, 15, "Ziel") }, {})
+   local msgs0 = #W.messages
+   local route = AutoTravel.BuildRoute()
+   eq(#route, 2, "A und das Ziel bleiben")
+   eq(flags(route), "2,2", "beide sind Wegpunkte")
+   eq(route[#route].name, "Ziel", "das Endziel bleibt der letzte Punkt")
+   local n = 0
+   for i = msgs0 + 1, #W.messages do
+      if W.messages[i]:find("keiner bekannten Zone der Karte und wird uebersprungen", 1, true) then n = n + 1 end
+   end
+   eq(n, 2, "beide uebersprungenen Wegpunkte stehen im Chat")
+   check(lastMessage("'B weit weg'") ~= nil and lastMessage("'C unbekannt'") ~= nil, "mit ihren Namen")
+
+   -- Ein Stuetzpunkt der Route ohne Zuordnung ist kein Ziel: er faellt still weg
+   chainCarbonite({ cpt(10, 10, "A"), cpt(30, 15, "Ziel") },
+                  { cpt(2, 3, "Start"), cpt(60, 15, "Umweg weit weg"), cpt(10, 10, "A"), cpt(30, 15, "Ziel") })
+   route = AutoTravel.BuildRoute()
+   eq(flags(route), "0,2,2", "der Stuetzpunkt faellt weg, die Wegpunkte bleiben")
+   eq(lastMessage("Umweg weit weg"), nil, "und wird nicht gemeldet")
+end)
+
+test("Wegpunktkette: laesst sich das Endziel nicht zuordnen, geht keine Kette hinaus", function()
+   ready()
+   -- das Endziel liegt ausserhalb jeder Zone
+   chainCarbonite({ cpt(10, 10, "A"), cpt(60, 15, "Ziel weit weg") }, {})
+   local route, err = AutoTravel.BuildRoute()
+   eq(route, nil, "keine Route")
+   check(err and err:find("Ziel weit weg", 1, true) and err:find("keiner bekannten Zone", 1, true),
+         "der Grund nennt das Ziel: " .. tostring(err))
+   AutoTravel.Start()
+   W.Advance(6)
+   eq(count(".at route"), 0, "keine Route gesendet")
+   eq(count(".at start"), 0, "auch kein Einzelziel zum ersten Wegpunkt")
+   eq(AutoTravel.active, false, "keine Reise")
+   eq(AutoTravel.chainTotal, 0, "keine Kette gemerkt")
+   check(lastMessage("keiner bekannten Zone") ~= nil, "die Absage steht im Chat")
+
+   -- ... oder auf einer Karte, die das Addon nicht kennt: es raet nicht die aktuelle Karte
+   local last = cpt(30, 15, "Ziel unbekannt")
+   last.MaI = 9
+   chainCarbonite({ cpt(10, 10, "A"), last }, {})
+   AutoTravel.Start()
+   W.Advance(6)
+   eq(count(".at start"), 0, "kein Einzelziel auf der geratenen Karte")
+   eq(count(".at route"), 0, "keine Route")
+   eq(AutoTravel.active, false, "keine Reise")
+
+   -- Ein Einzelziel in einer unbekannten Zone behaelt den Rueckgriff auf die aktuelle Karte (wie bis 11.8)
+   chainCarbonite({}, { cpt(2, 3, "Start"), last })
+   AutoTravel.Start()
+   W.Advance(6)
+   eq(count(".at start"), 1, "Einzelziel mit der aktuellen Karte")
+   eq(count(".at route"), 0, "ohne Route")
+
+   -- ... auch in der Betriebsart 'alle': ein einziger markierter Punkt ist keine Kette
+   AutoTravel.Stop()
+   W.Advance(1)
+   W.ClearSent()
+   AutoTravel.Set("WaypointMode", "alle")
+   chainCarbonite({}, { cpt(2, 3, "Start"), last })
+   AutoTravel.Start()
+   W.Advance(6)
+   eq(count(".at start"), 1, "alle: ein markierter Punkt ist keine Kette")
+   AutoTravel.Set("WaypointMode", "ziele")
+end)
+
+test("Wegpunktkette: seltsame Daten in .Tar und .Tra1 loesen nirgends einen Fehler aus", function()
+   ready()
+   local odd = {
+      5, true, "text", function() end,
+      { 5, true, "x", {} },
+      { { TMX = "a", TMY = 2 }, { TMX = 1 }, { TMX = 1, TMY = 1 / 0 }, { TMX = 1, TMY = 2 } },
+      {},
+   }
+   local calls = {
+      { "GetRoute ziele",   function() return AutoTravel.Carb.GetRoute("ziele") end },
+      { "GetRoute alle",    function() return AutoTravel.Carb.GetRoute("alle") end },
+      { "GetRoute aus",     function() return AutoTravel.Carb.GetRoute("aus") end },
+      { "GetDestination",   function() return AutoTravel.Carb.GetDestination() end },
+      { "HasTarget",        function() return AutoTravel.Carb.HasTarget() end },
+      { "Dump",             function() return AutoTravel.Carb.Dump() end },
+      { "BuildRoute",       function() return AutoTravel.BuildRoute() end },
+      { "BuildTargetArgs",  function() return AutoTravel.BuildTargetArgs() end },
+      { "Start",            function() AutoTravel.Start() end },
+      { "/at route",        function() SlashCmdList["AUTOTRAVEL"]("route") end },
+      { "/at route roh",    function() SlashCmdList["AUTOTRAVEL"]("route roh") end },
+      { "/at target",       function() SlashCmdList["AUTOTRAVEL"]("target") end },
+   }
+   for a, tra in ipairs(odd) do
+      for b, tar in ipairs(odd) do
+         chainCarbonite(tar, tra)
+         for _, c in ipairs(calls) do
+            local ok, err = pcall(c[2])
+            check(ok, c[1] .. " mit Tra1 #" .. a .. " (" .. type(tra) .. "), Tar #" .. b .. " (" .. type(tar) .. "): " .. tostring(err))
+         end
+         AutoTravel.Stop()
+      end
+   end
+end)
+
+test("Wegpunktkette: die Art 3 (Flug und Wegpunkt zugleich) entsteht nie", function()
+   ready()
+   -- ein gesetztes Ziel mit Mod "F" und "Flug" im Namen ist ein Wegpunkt, kein Flugpunkt
+   chainCarbonite({ cpt(10, 10, "Flugmeister", "F"), cpt(30, 15, "Ziel") }, {})
+   local route = AutoTravel.BuildRoute()
+   eq(flags(route), "2,2", "nur Wegpunkte")
+
+   -- ein Wegpunkt auf einem Flugpunkt der Route nimmt dessen Stelle ein und bleibt ein Wegpunkt ...
+   chainCarbonite({ cpt(10.001, 10.001, "A"), cpt(30, 15, "Ziel") },
+                  { cpt(2, 3, "Start"), cpt(10, 10, "Flug", "F"), cpt(10.001, 10.001, "A"), cpt(30, 15, "Ziel") })
+   route = AutoTravel.BuildRoute()
+   eq(flags(route), "0,2,2", "Flugpunkt, dann Wegpunkt an einer Stelle: ein Wegpunkt")
+   check(math.abs(route[2].nx - (10 + 10.001 * 2) / 100) < 1e-9, "an der Stelle des Wegpunkts")
+
+   -- ... gleich, in welcher Reihenfolge sie liegen
+   chainCarbonite({ cpt(10, 10, "A"), cpt(30, 15, "Ziel") },
+                  { cpt(2, 3, "Start"), cpt(10, 10, "A"), cpt(10.001, 10.001, "Flug", "F"), cpt(30, 15, "Ziel") })
+   route = AutoTravel.BuildRoute()
+   eq(flags(route), "0,2,2", "Wegpunkt, dann Flugpunkt an einer Stelle: ein Wegpunkt")
+
+   -- Eine einfache Reise fasst Punkte wie bis 11.8 zusammen: die Art des ersten bleibt
+   chainCarbonite({ cpt(30, 15, "Ziel") },
+                  { cpt(2, 3, "Start"), cpt(10, 10, "Tor"), cpt(10.001, 10.001, "Flug", "F"), cpt(30, 15, "Ziel") })
+   route = AutoTravel.BuildRoute()
+   eq(flags(route), "0,0,0", "ein Einzelziel: Tor und Flugpunkt werden zu einem gewoehnlichen Stuetzpunkt")
+
+   -- Schon beim Lesen ist ein gesetztes Ziel kein Flugpunkt, auch mit Mod "F" und "Flug" im Namen
+   chainCarbonite({ cpt(10, 10, "Flugmeister Bob", "F"), cpt(30, 15, "Ziel") }, {})
+   local legs = AutoTravel.Carb.GetRoute("ziele")
+   eq(legs[1].taxi, false, "ein gesetztes Ziel ist kein Flugpunkt")
+   eq(legs[1].waypoint, true, "sondern ein Wegpunkt")
+
+   -- Die Regel steht auch in BuildRoute selbst: kaeme ein Eintrag mit beiden Merkmalen, bliebe er ein Wegpunkt
+   local carb = AutoTravel.Carb
+   local realGetRoute = carb.GetRoute
+   carb.GetRoute = function()
+      return {
+         { name = "Doppelt", cx = 10, cy = 10, mapIndex = 1, mapName = "Elwynn", taxi = true, waypoint = true },
+         { name = "Ziel", cx = 30, cy = 15, mapIndex = 1, mapName = "Elwynn", taxi = false, waypoint = true },
+      }, "route"
+   end
+   route = AutoTravel.BuildRoute()
+   carb.GetRoute = realGetRoute
+   eq(flags(route), "2,2", "Flug und Wegpunkt zugleich: ein Wegpunkt, nie Art 3")
+end)
+
+-- Das letzte ".at route" und das ".at rstart" aus den gesendeten Befehlen
+local function lastRouteAndRstart()
+   local lastRoute, rstart
+   for _, c in ipairs(W.SentCommands()) do
+      if c:sub(1, 10) == ".at route " then lastRoute = c end
+      if c:sub(1, 10) == ".at rstart" then rstart = c end
+   end
+   return lastRoute, rstart
+end
+
+test("Wegpunktkette: Name und letzter Punkt der Route sind das Endziel", function()
+   ready()
+   local tar = { cpt(10, 10, "A"), cpt(20, 30, "B"), cpt(30, 15, "Ziel |cffff0000rot|r") }
+   local tra = { cpt(2, 3, "Start"), cpt(5, 5, "Tor"), tar[1], cpt(15, 20, "Bruecke"), tar[2], tar[3] }
+   chainCarbonite(tar, tra)
+   AutoTravel.Start()
+   W.Advance(6)
+   local lastRoute, rstart = lastRouteAndRstart()
+   check(rstart ~= nil and rstart:find(" Ziel rot$") ~= nil, "rstart traegt den bereinigten Namen des Endziels: " .. tostring(rstart))
+   check(lastRoute ~= nil and lastRoute:find(":0%.7000:0%.3500:2$") ~= nil,
+         "der letzte Punkt der Route ist das Endziel (Art 2): " .. tostring(lastRoute))
+   eq(AutoTravel.status.target, "Ziel rot", "das Panel nennt das Endziel")
+
+   -- dasselbe fuer eine einfache Reise mit mehreren Stuetzpunkten
+   AutoTravel.Stop()
+   W.Advance(1)
+   W.ClearSent()
+   chainCarbonite({ cpt(30, 15, "Ziel |cffff0000rot|r") },
+                  { cpt(2, 3, "Start"), cpt(5, 5, "Tor"), cpt(30, 15, "Ziel |cffff0000rot|r") })
+   AutoTravel.Start()
+   W.Advance(6)
+   lastRoute, rstart = lastRouteAndRstart()
+   check(rstart ~= nil and rstart:find(" Ziel rot$") ~= nil, "einfache Reise: Name des Endziels: " .. tostring(rstart))
+   check(lastRoute ~= nil and lastRoute:find(":0%.7000:0%.3500:0$") ~= nil,
+         "einfache Reise: letzter Punkt ohne Markierung: " .. tostring(lastRoute))
+   eq(AutoTravel.chainTotal, 0, "keine Kette")
+end)
+
+test("Wegpunktkette: Ziel und Route einer Reise kommen aus derselben Liste, auch in der Betriebsart 'aus'", function()
+   ready()
+   -- .Tra1 fuehrt nur zum ersten Ziel, .Tar kennt drei (nicht zusammenpassende Daten)
+   local tar = { cpt(10, 10, "A"), cpt(20, 30, "B"), cpt(30, 15, "C") }
+   chainCarbonite(tar, { cpt(2, 3, "Start"), cpt(5, 5, "Tor"), cpt(10, 10, "A") })
+
+   -- Die Zielanzeige ("/at target", auch Teleport und Diagnose) folgt derselben Betriebsart
+   local function targetLine()
+      local from = #W.messages
+      SlashCmdList["AUTOTRAVEL"]("target")
+      for i = from + 1, #W.messages do
+         if W.messages[i]:find("Ziel: ", 1, true) then return W.messages[i] end
+      end
+      return ""
+   end
+   check(targetLine():find("Ziel: C  |", 1, true) ~= nil, "Standard: /at target nennt C")
+
+   AutoTravel.Start()
+   W.Advance(6)
+   local lastRoute, rstart = lastRouteAndRstart()
+   check(rstart ~= nil and rstart:find(" C$") ~= nil, "Standard: die Kette endet bei C: " .. tostring(rstart))
+   check(lastRoute ~= nil and lastRoute:find(":0%.7000:0%.3500:2$") ~= nil, "mit dem Punkt von C: " .. tostring(lastRoute))
+   eq(AutoTravel.status.target, "C", "das Panel nennt C")
+
+   -- 'aus' faehrt wie bis 11.8: das Ziel ist der letzte Punkt von .Tra1, Name und Punkt gehoeren zusammen
+   AutoTravel.Stop()
+   W.Advance(1)
+   W.ClearSent()
+   AutoTravel.Set("WaypointMode", "aus")
+   check(targetLine():find("Ziel: A  |", 1, true) ~= nil, "aus: /at target nennt A")
+   AutoTravel.Start()
+   W.Advance(6)
+   lastRoute, rstart = lastRouteAndRstart()
+   check(rstart ~= nil and rstart:find(" A$") ~= nil, "aus: das Ziel ist A: " .. tostring(rstart))
+   check(lastRoute ~= nil and lastRoute:find(":0%.3000:0%.3000:0$") ~= nil, "mit dem Punkt von A: " .. tostring(lastRoute))
+   eq(AutoTravel.status.target, "A", "das Panel nennt A")
+   eq(AutoTravel.chainTotal, 0, "keine Kette")
+   AutoTravel.Set("WaypointMode", "ziele")
+end)
+
+test("Wegpunktkette: zwei Wegpunkte sind schon eine Kette, die Anzeige zaehlt sie", function()
+   ready(CAPS_ALL)
+   chainCarbonite({ cpt(10, 10, "A"), cpt(30, 15, "Ziel") }, {})
+   AutoTravel.Start()
+   W.Advance(6)
+   eq(AutoTravel.chainTotal, 2, "zwei Wegpunkte")
+   status("TRAVELING|120|Ziel|8|10|0|1|2|0")
+   eq(_G.AutoTravelPanel.lLeg:GetText(), "Wegpunkt 1/2", "Wegpunkt 1/2")
+   status("TRAVELING|60|Ziel|8|10|0|2|2|50")
+   eq(_G.AutoTravelPanel.lLeg:GetText(), "Wegpunkt 2/2", "Wegpunkt 2/2")
+end)
+
+test("Wegpunktkette: scheitert das Senden, bleibt keine Kettengroesse zurueck", function()
+   boot()
+   W.Advance(3) W.Advance(5.5) W.Advance(5.5)              -- kein Modul: ABSENT
+   eq(AutoTravel.Net.state, "ABSENT", "ABSENT")
+   chainCarbonite({ cpt(10, 10, "A"), cpt(30, 15, "Ziel") }, {})
+   AutoTravel.Start()
+   W.Advance(2)
+   eq(AutoTravel.active, false, "keine Reise")
+   eq(AutoTravel.chainTotal, 0, "keine Kettengroesse gemerkt")
+end)
+
+test("Wegpunktkette: zwei Ziele, die zusammenfallen, sind ein Einzelziel", function()
+   ready(CAPS_ALL)
+   chainCarbonite({ cpt(10, 10, "A"), cpt(10.001, 10.001, "A2") }, {})
+   AutoTravel.Start()
+   W.Advance(6)
+   eq(count(".at route"), 0, "keine Route")
+   eq(count(".at start"), 1, "Einzelziel")
+   eq(AutoTravel.chainTotal, 0, "keine Kette")
+end)
+
+test("/at route zeigt die Wegpunkte, /at route roh die Rohdaten von Carbonite", function()
+   ready()
+   local tar = { cpt(10, 10, "A"), cpt(30, 15, "Ziel |cffff0000rot|r") }
+   chainCarbonite(tar, { cpt(2, 3, "Start"), tar[1], tar[2] })
+   local msgs0 = #W.messages
+   SlashCmdList["AUTOTRAVEL"]("route")
+   local lines = {}
+   for i = msgs0 + 1, #W.messages do lines[#lines + 1] = W.messages[i] end
+   local text = table.concat(lines, "\n")
+   check(text:find("2 Wegpunkte (abgleich)", 1, true) ~= nil, "Kopfzeile nennt Zahl und Erkennung")
+   local marked = 0
+   for _ in text:gmatch("%[Wegpunkt%]") do marked = marked + 1 end
+   eq(marked, 2, "zwei Zeilen tragen die Markierung")
+
+   msgs0 = #W.messages
+   SlashCmdList["AUTOTRAVEL"]("route roh")
+   lines = {}
+   for i = msgs0 + 1, #W.messages do lines[#lines + 1] = W.messages[i] end
+   text = table.concat(lines, "\n")
+   check(text:find("Tar (gesetzte Ziele): 2 Eintraege", 1, true) ~= nil, "Tar wird gezeigt")
+   check(text:find("Tra1 (berechnete Route): 3 Eintraege", 1, true) ~= nil, "Tra1 wird gezeigt")
+   check(text:find("TMX=10", 1, true) ~= nil, "Felder der Eintraege")
+   check(text:find("||cffff0000rot||r", 1, true) ~= nil, "Pipes sind verdoppelt: der Farbcode wird nicht ausgefuehrt")
+   check(not text:find("[^|]|c", 1) , "kein roher Farbcode in der Ausgabe")
+end)
+
 test("Start ohne Carbonite meldet es, statt etwas zu senden", function()
    ready()
    AutoTravel.Start()
@@ -909,17 +1785,18 @@ test("/at profil <name> waehlt das Profil und kennt auch Gross-/Kleinschreibung 
    eq(AutoTravel.Get("Profile"), "plus", "unbekanntes Profil aendert nichts")
 end)
 
-test("Profil Plus: sammelt per nc-Strategie, ll bleibt gueltig", function()
+test("Profil Plus: sammelt per nc-Strategie, ll all", function()
    ready()
    local plus
    for _, p in ipairs(AutoTravel.Bot.List()) do if p.key == "plus" then plus = p end end
    check(plus ~= nil, "Profil vorhanden")
    check(plus.noncombat:find("+gather", 1, true) ~= nil, "+gather")
    check(plus.noncombat:find("+loot", 1, true) ~= nil, "+loot")
-   for _, e in ipairs(plus.extra or {}) do
-      check(e == "ll normal" or e == "ll all", "ll-Wert gueltig: " .. e)
-   end
+   eq(#plus.extra, 1, "ein Zusatzbefehl")
+   eq(plus.extra[1], "ll all", "ll all")
 end)
+
+
 
 -- ---------------------------------------------------------------------------
 -- Warteschlange, Start und Stop
@@ -1100,16 +1977,230 @@ local function enter(editName, text)
    eb.__scripts.OnEnterPressed(eb)
 end
 
-test("Profil Normal lootet: +loot und ll normal, keine -loot-Strategie, Wartezeit zum Looten", function()
+test("Profil Normal lootet: +loot und ll all, keine -loot-Strategie, Wartezeit zum Looten", function()
    ready()
    local B = AutoTravel.Bot
    AutoTravel.Set("Profile", "normal")
    B.ApplyProfile()
    W.Advance(10)
    check(hasWhisper("nc +loot,-gather,-grind,-new rpg,-follow,+food"), "nc setzt +loot, aber kein gather")
-   check(hasWhisper("ll normal"), "ll normal wird gesendet")
+   check(hasWhisper("ll all"), "ll all wird gesendet")
+   check(not hasWhisper("ll normal"), "kein ll normal: das liesse Gegenstaende ohne Verwendung in der Leiche")
    check(not anyWhisperMatches("-loot"), "nirgends -loot")
    check(W.SentContains(".at set grace 7"), "Wartezeit 7 s, damit der Bot looten kann")
+end)
+
+-- ---------------------------------------------------------------------------
+-- Volle Taschen: der Bot nimmt ab 81 % keine Einzelgegenstaende mehr aus der Beute
+-- ---------------------------------------------------------------------------
+
+-- Eine Tasche mit 'size' Plaetzen, von denen 'used' belegt sind; family ~= 0: Berufs- oder Koechertasche.
+local function fillBag(bag, size, used, family)
+   local b = { size = size, family = family }
+   for slot = 1, used do b[slot] = { id = 40000 + bag * 100 + slot, count = 1 } end
+   W.world.bags[bag] = b
+end
+
+test("Taschenfuellstand: gerechnet wie der Bot, nur normale Taschen, Nachkommastellen fallen weg", function()
+   boot()
+   local B = AutoTravel.Bot
+   eq(B.BagFill(), nil, "keine Taschen: nichts zu sagen")
+
+   fillBag(0, 16, 13)
+   fillBag(1, 16, 13)
+   eq(B.BagFill(), 81, "26 von 32 Plaetzen: 81 %")
+
+   fillBag(1, 16, 12)
+   eq(B.BagFill(), 78, "25 von 32: 78 %")
+
+   -- genau 80 % ist noch nicht ueber der Grenze, 80,5 % auch nicht (die Nachkommastellen fallen weg)
+   fillBag(0, 16, 16)
+   fillBag(1, 24, 16)
+   eq(B.BagFill(), 80, "32 von 40: genau 80 %")
+   fillBag(1, 24, 17)
+   eq(B.BagFill(), 82, "33 von 40: 82 %")
+   fillBag(0, 16, 16)
+   fillBag(1, 24, 16)
+   fillBag(2, 4, 0)
+   eq(B.BagFill(), 72, "32 von 44: 72,7 %, abgerundet auf 72")
+
+   -- Berufs- und Koechertaschen zaehlen nicht mit (der Bot rechnet nur ITEM_SUBCLASS_CONTAINER)
+   fillBag(0, 16, 8)
+   fillBag(1, 16, 8)
+   fillBag(2, 16, 16, 32)
+   eq(B.BagFill(), 50, "die volle Kraeutertasche bleibt aussen vor")
+   fillBag(2, 16, 16, 0)
+   eq(B.BagFill(), 66, "dieselbe Tasche als normale Tasche zaehlt: 32 von 48")
+end)
+
+test("Taschenfuellstand: gewarnt wird ab 81 %, bei genau 80 % und darunter nicht", function()
+   boot()
+   local B = AutoTravel.Bot
+   fillBag(0, 16, 16)
+   fillBag(1, 24, 15)
+   eq(B.BagFill(), 77, "31 von 40")
+   eq(B.WarnBagsFull(), false, "77 %: keine Warnung")
+   fillBag(1, 24, 16)
+   eq(B.BagFill(), 80, "32 von 40")
+   eq(B.WarnBagsFull(), false, "genau 80 %: der Bot nimmt noch alles (er verlangt ueber 80)")
+   fillBag(1, 24, 17)
+   eq(B.WarnBagsFull(), true, "82 %: Warnung")
+   eq(B.BAG_LIMIT, 80, "die Grenze des Bots")
+end)
+
+test("Taschenfuellstand: ohne die Abfragen des Clients kein Absturz", function()
+   boot()
+   local saved = _G.GetContainerNumFreeSlots
+   _G.GetContainerNumFreeSlots = nil
+   eq(AutoTravel.Bot.BagFill(), nil, "ohne GetContainerNumFreeSlots")
+   eq(AutoTravel.Bot.WarnBagsFull(), false, "und keine Warnung")
+   _G.GetContainerNumFreeSlots = saved
+end)
+
+-- Zeilen mit der Warnung vor vollen Taschen seit 'from' im Chat: Zahl und letzter Wortlaut
+local function bagWarnings(from)
+   local n, text = 0, nil
+   for i = from + 1, #W.messages do
+      if W.messages[i]:find("Taschen zu", 1, true) then n = n + 1 text = W.messages[i] end
+   end
+   return n, text
+end
+
+test("volle Taschen: Warnung, sobald der Server den Selbstmodus bestaetigt, genau einmal, mit dem Grund", function()
+   ready()
+   installCarbonite(1)
+   AutoTravel.MapIds.Build(true)
+   fillBag(0, 16, 16)
+   fillBag(1, 16, 14)
+   local msgs0 = #W.messages
+   AutoTravel.Start()
+   W.Advance(1)
+   status("TRAVELING|300|Ziel|8|20|0|1|1|10")
+   W.Advance(10)
+   eq((bagWarnings(msgs0)), 0, "vor der Bestaetigung noch nichts: der Server kann den Selbstmodus verweigern")
+
+   W.ServerLine("SelfBot is now active.")
+   local n, text = bagWarnings(msgs0)
+   eq(n, 1, "einmal gemeldet")
+   check(text and text:find("93 % voll", 1, true) ~= nil, "mit dem Fuellstand: " .. tostring(text))
+   check(text and text:find("ll all", 1, true) ~= nil, "und dem Hinweis, dass 'll all' nichts aendert")
+
+   -- weitere Statuszeilen und eine wiederholte Bestaetigung melden nicht erneut
+   status("TRAVELING|300|Ziel|8|20|0|1|1|10")
+   status("TRAVELING|300|Ziel|8|20|0|1|1|10")
+   W.ServerLine("SelfBot is now active.")
+   W.Advance(2)
+   eq((bagWarnings(msgs0)), 1, "weitere Statuszeilen und Bestaetigungen melden nicht erneut")
+end)
+
+test("volle Taschen: verweigert der Server den Selbstmodus, gibt es keine Warnung", function()
+   ready()
+   installCarbonite(1)
+   AutoTravel.MapIds.Build(true)
+   fillBag(0, 16, 16)
+   fillBag(1, 16, 16)
+   local msgs0 = #W.messages
+   AutoTravel.Start()
+   W.Advance(1)
+   status("TRAVELING|300|Ziel|8|20|0|1|1|10")
+   W.ServerLine("SelfBot is restricted for this account.")
+   W.Advance(10)
+   eq((bagWarnings(msgs0)), 0, "ohne Selbstmodus gibt es keinen Bot, der Beute verweigern koennte")
+   check(lastMessage("verweigert") ~= nil, "die Verweigerung selbst wird gemeldet")
+end)
+
+test("volle Taschen: laeuft der Selbstmodus schon, meldet der naechste Reisebeginn es", function()
+   ready()
+   installCarbonite(1)
+   AutoTravel.MapIds.Build(true)
+   fillBag(0, 16, 4)
+   fillBag(1, 16, 4)
+   AutoTravel.Start()
+   W.Advance(1)
+   status("TRAVELING|300|Ziel|8|20|0|1|1|10")
+   W.ServerLine("SelfBot is now active.")
+   status("ARRIVED|0|Ziel|8|0|0|1|1|100")              -- AutoDisableBot ist aus: der Selbstmodus bleibt an
+   W.Advance(2)
+   eq(AutoTravel.Bot.confirmed, true, "der Selbstmodus laeuft weiter")
+
+   -- unterwegs fuellen sich die Taschen
+   fillBag(0, 16, 16)
+   fillBag(1, 16, 16)
+   local msgs0 = #W.messages
+   AutoTravel.Start()
+   W.Advance(1)
+   eq((bagWarnings(msgs0)), 0, "vor der Annahme des Starts noch nichts")
+   status("TRAVELING|300|Ziel|8|20|0|1|1|10")
+   local n, text = bagWarnings(msgs0)
+   eq(n, 1, "mit der Annahme des Starts, ohne neue Bestaetigung des Selbstmodus")
+   check(text and text:find("100 % voll", 1, true) ~= nil, "mit dem Fuellstand: " .. tostring(text))
+end)
+
+test("volle Taschen: einmal, solange sie voll bleiben; Platz scharft die Meldung wieder", function()
+   boot()
+   local B = AutoTravel.Bot
+   fillBag(0, 16, 16)
+   fillBag(1, 16, 16)
+   eq(B.WarnBagsFull(), true, "erster Start mit vollen Taschen: Meldung")
+   eq(B.WarnBagsFull(), false, "zweiter Start, noch voll: keine zweite Zeile")
+   eq(B.WarnBagsFull(), false, "und auch kein dritter")
+   fillBag(1, 16, 4)
+   eq(B.WarnBagsFull(), false, "mit Platz: nichts zu melden")
+   fillBag(1, 16, 16)
+   eq(B.WarnBagsFull(), true, "wieder voll: wieder eine Meldung")
+end)
+
+test("volle Taschen: keine Warnung bei Platz oder ohne Playerbot-Steuerung", function()
+   ready()
+   installCarbonite(1)
+   AutoTravel.MapIds.Build(true)
+
+   -- Platz genug
+   fillBag(0, 16, 4)
+   fillBag(1, 16, 4)
+   local msgs0 = #W.messages
+   AutoTravel.Start()
+   W.Advance(1)
+   status("TRAVELING|300|Ziel|8|20|0|1|1|10")
+   W.ServerLine("SelfBot is now active.")
+   W.Advance(10)
+   eq((bagWarnings(msgs0)), 0, "bei viel Platz keine Warnung")
+
+   -- zu voll, aber ohne Playerbot-Steuerung fuehrt der Spieler den Selbstmodus selbst: das Addon schweigt dazu
+   AutoTravel.Stop()
+   W.Advance(1)
+   W.ServerLine("SelfBot is now deactivated.")
+   fillBag(0, 16, 16)
+   fillBag(1, 16, 16)
+   AutoTravel.Set("BotControl", 0)
+   msgs0 = #W.messages
+   AutoTravel.Start()
+   W.Advance(1)
+   status("TRAVELING|300|Ziel|8|20|0|1|1|10")
+   W.ServerLine("SelfBot is now active.")                 -- von Hand eingeschaltet
+   W.Advance(10)
+   eq((bagWarnings(msgs0)), 0, "ohne Playerbot-Steuerung keine Warnung")
+
+   -- ... und mit Steuerung kommt sie bei der naechsten Bestaetigung
+   AutoTravel.Set("BotControl", 1)
+   W.ServerLine("SelfBot is now deactivated.")
+   W.ServerLine("SelfBot is now active.")
+   eq((bagWarnings(msgs0)), 1, "mit Playerbot-Steuerung wird gewarnt")
+end)
+
+test("Taschenfuellstand: alle vier Taschenplaetze zaehlen, Bankfaecher nicht", function()
+   boot()
+   local B = AutoTravel.Bot
+   fillBag(0, 16, 0)
+   fillBag(1, 16, 0)
+   fillBag(2, 16, 0)
+   fillBag(3, 16, 0)
+   fillBag(4, 16, 16)                                      -- die vierte eingesetzte Tasche (Platz 4)
+   eq(B.BagFill(), 20, "16 von 80 Plaetzen: Tasche 4 zaehlt mit")
+   fillBag(5, 28, 28)                                      -- ein Bankfach liegt ausserhalb
+   eq(B.BagFill(), 20, "Bankfaecher zaehlen nicht")
+   fillBag(4, 16, 0)
+   eq(B.BagFill(), 0, "alles leer")
 end)
 
 test("Profile, die nicht looten sollen, tun es weiter nicht", function()
@@ -1118,6 +2209,96 @@ test("Profile, die nicht looten sollen, tun es weiter nicht", function()
       local p = AutoTravel.Bot.Find(key)
       check(p.noncombat:find("-loot", 1, true) ~= nil, key .. " bleibt bei -loot")
    end
+end)
+
+-- "ll normal" laesst Gegenstaende ohne Verwendung in der Leiche, und im Selbstmodus laeuft auch jedes
+-- Beutefenster, das der Spieler von Hand oeffnet, durch dieselbe Aktion des Bots (mod-playerbots: Hook
+-- OnPacketSent -> "loot response" -> "store loot"): sie nimmt die erlaubten Gegenstaende und schliesst das
+-- Fenster. Deshalb sendet JEDES feste Profil "ll all" -- auch die, die den Bot nicht looten lassen.
+test("alle festen Profile senden ll all und nie ll normal", function()
+   ready()
+   local B = AutoTravel.Bot
+   for _, d in ipairs(B.Builtin) do
+      AutoTravel.Set("Profile", d.key)
+      W.ClearSent()
+      B.ApplyProfile()
+      W.Advance(10)
+      check(hasWhisper("ll all"), d.key .. ": ll all gesendet")
+      check(not hasWhisper("ll normal"), d.key .. ": kein ll normal")
+      check(not anyWhisperMatches("ll gray"), d.key .. ": kein ll gray")
+      eq(#B.Find(d.key).extra, 1, d.key .. ": genau ein Zusatzbefehl")
+   end
+end)
+
+-- Gespeicherte Schnappschuesse fester Profile halten den alten Standard fest (siehe Bot.MigrateLootFilter).
+-- Eine Ueberschreibung, wie sie vor 11.9 abgelegt wurde: die Standardflaggen, 'extra' und 'grace' nach Wahl.
+local function oldSnapshot(B, key, extra, grace)
+   local d = B.BuiltinDefault(key)
+   return { combat = B.ParseFlags(d.combat), noncombat = B.ParseFlags(d.noncombat), extra = extra, grace = grace or d.grace }
+end
+
+test("Beutefilter: gespeicherte Profile mit dem alten Standard bekommen ll all, alles andere bleibt", function()
+   boot()
+   local B = AutoTravel.Bot
+   local g = B.Global()
+   g.lootFilterMigrated = nil
+   g.builtin = {
+      normal     = oldSnapshot(B, "normal", "ll normal", 9),         -- nur die Wartezeit geaendert
+      plus       = oldSnapshot(B, "plus", "ll normal"),              -- gleicht dem Standard bis auf den alten Beutefilter
+      aggressiv  = oldSnapshot(B, "aggressiv", "ll normal; sit"),    -- eigener Zusatzbefehl
+      minimal    = oldSnapshot(B, "minimal", "", 3),                 -- kein Zusatzbefehl: der alte Standard
+      aengstlich = oldSnapshot(B, "aengstlich", "ll gray", 3),       -- bewusst anderer Filter
+      verteidigen = "unsinn",                                        -- beschaedigt
+   }
+   eq(B.MigrateLootFilter(), true, "es wurde etwas umgestellt")
+   eq(g.lootFilterMigrated, true, "und gemerkt")
+
+   eq(g.builtin.normal.extra, "ll all", "Normal: alter Standard -> ll all")
+   eq(g.builtin.normal.grace, 9, "Normal: die geaenderte Wartezeit bleibt")
+   check(B.IsModified("normal"), "Normal bleibt geaendert (Wartezeit)")
+
+   check(not B.HasOverride("plus"), "Plus: nur der Beutefilter war anders, der Schnappschuss entfaellt")
+   check(not B.IsModified("plus"), "Plus ist wieder der Standard")
+
+   eq(g.builtin.aggressiv.extra, "ll normal; sit", "Aggressiv: eigene Zusatzbefehle bleiben")
+   eq(g.builtin.minimal.extra, "ll all", "Minimal: kein Zusatzbefehl war der alte Standard -> ll all")
+   eq(g.builtin.minimal.grace, 3, "Minimal: die geaenderte Wartezeit bleibt")
+   eq(g.builtin.aengstlich.extra, "ll gray", "Aengstlich: ein bewusst gewaehlter Filter bleibt")
+   eq(g.builtin.verteidigen, "unsinn", "ein beschaedigter Eintrag bleibt unberuehrt (und loest keinen Fehler aus)")
+
+   -- Danach nie wieder: wer ll normal bewusst zurueckstellt, behaelt es
+   g.builtin.normal.extra = "ll normal"
+   eq(B.MigrateLootFilter(), false, "zweiter Aufruf")
+   eq(g.builtin.normal.extra, "ll normal", "bleibt, wie der Spieler es stellt")
+end)
+
+test("Beutefilter: ohne gespeicherte Profile ist nichts zu tun, der Aufruf merkt sich es trotzdem", function()
+   boot()
+   local B = AutoTravel.Bot
+   local g = B.Global()
+   g.lootFilterMigrated = nil
+   g.builtin = {}
+   eq(B.MigrateLootFilter(), false, "nichts zu tun")
+   eq(g.lootFilterMigrated, true, "gemerkt")
+   -- ein Schnappschuss, der danach entsteht, gehoert dem Spieler
+   g.builtin.normal = oldSnapshot(B, "normal", "ll normal", 9)
+   eq(B.MigrateLootFilter(), false, "kein zweiter Lauf")
+   eq(g.builtin.normal.extra, "ll normal", "unberuehrt")
+end)
+
+test("Beutefilter: das Laden des Addons stellt gespeicherte Profile um", function()
+   W.Install()
+   _G.AutoTravelGlobalDB = { builtin = {
+      normal = { combat = { dps = true }, noncombat = { loot = true }, extra = "ll normal", grace = 9 },
+      plus = { combat = { dps = true }, noncombat = { loot = true }, extra = "ll normal; sit", grace = 7 },
+   } }
+   W.LoadToc(".", "AutoTravel.toc")
+   W.Fire("ADDON_LOADED", "AutoTravel")
+   W.Fire("PLAYER_LOGIN")
+   local g = _G.AutoTravelGlobalDB
+   eq(g.builtin.normal.extra, "ll all", "Normal beim Laden umgestellt")
+   eq(g.builtin.plus.extra, "ll normal; sit", "Plus bleibt: eigener Zusatzbefehl")
+   eq(g.lootFilterMigrated, true, "gemerkt")
 end)
 
 test("jede Strategie der festen Profile ist im Editor vertreten (Umwandlung geht nichts verloren)", function()
@@ -1259,14 +2440,14 @@ test("Editor: Wartezeit und Zusatzbefehle werden gespeichert und geprueft", func
    for _, m in ipairs(W.messages) do if m:find("Wartezeit", 1, true) and m:find("Zahl", 1, true) then warned = true end end
    check(warned, "Hinweis bei ungueltiger Eingabe")
 
-   enter("AutoTravelProfileExtra", "ll normal; ll skill ;; ")
+   enter("AutoTravelProfileExtra", "ll gray; ll disenchant ;; ")
    local p = B.Find("normal")
    eq(#p.extra, 2, "zwei Zusatzbefehle")
-   eq(p.extra[2], "ll skill", "Leerraum entfernt")
+   eq(p.extra[2], "ll disenchant", "Leerraum entfernt")
 
    AutoTravel.ProfileEditor.ResetSelected()
    eq(B.Find("normal").grace, 7.0, "Wartezeit wieder Standard")
-   eq(B.Find("normal").extra[1], "ll normal", "Zusatzbefehl wieder Standard")
+   eq(B.Find("normal").extra[1], "ll all", "Zusatzbefehl wieder Standard")
 end)
 
 test("Editor: Neuanwendung beim Bearbeiten gebuendelt statt bei jedem Klick", function()
@@ -1594,7 +2775,7 @@ test("angenommener Start schaltet Selbstmodus und Profil ein", function()
    W.Advance(10)
    eq(count(".playerbots bot self"), 1, "Selbstmodus eingeschaltet")
    check(hasWhisper("co !") and hasWhisper("nc !"), "Profil gesendet")
-   check(hasWhisper("ll normal"), "ll normal gesendet")
+   check(hasWhisper("ll all"), "ll all gesendet")
    eq(AutoTravel.supportOn, true, "Hilfen laufen")
    eq(AutoTravel.pendingStartAt, nil, "kein wartender Start mehr")
 
@@ -2517,7 +3698,7 @@ test("Bot.ApplyProfile(true) sendet nur die Kampfstrategien und die Gestalt, kei
    eq(w[2], "co +dps assist,+aoe,+avoid aoe,-grind", "die Kampfstrategien des Profils")
    eq(w[3], "co +cat,-aoe,-cc,-boost,-cure", "als letztes die Gestalt")
    for _, t in ipairs(w) do check(t:sub(1, 3) ~= "nc ", "kein nc-Befehl: " .. t) end
-   check(not hasWhisper("ll normal"), "keine Zusatzbefehle")
+   check(not hasWhisper("ll all"), "keine Zusatzbefehle")
    check(not W.SentContains(".at set grace"), "keine Wartezeit")
    eq(B.applyCount, count0, "applyCount nicht erhoeht")
    eq(msgCount(), msgs0, "keine Profilmeldung")
@@ -2531,7 +3712,7 @@ test("Bot.ApplyProfile(true) sendet nur die Kampfstrategien und die Gestalt, kei
    eq(B.applyCount, count0 + 1, "applyCount erhoeht")
    check(hasWhisper("nc !"), "nc ! gesendet")
    check(hasWhisper("nc +loot,-gather,-grind,-new rpg,-follow,+food"), "nc-Strategien gesendet")
-   check(hasWhisper("ll normal"), "Zusatzbefehl gesendet")
+   check(hasWhisper("ll all"), "Zusatzbefehl gesendet")
    check(W.SentContains(".at set grace 7"), "Wartezeit gesendet")
    eq(w[#w], "co +cat,-aoe,-cc,-boost,-cure", "die Gestalt steht auch hier zuletzt")
 

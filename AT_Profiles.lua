@@ -21,7 +21,7 @@
 --                   hinterlaesst.
 --
 -- Ein Freitextfeld nimmt zusaetzliche Befehle auf, etwa klassenspezifische
--- Strategien oder "ll skill". Die Wartezeit nach dem Kampf gilt fuer die eigene
+-- Strategien oder einen anderen Beutefilter ("ll gray"). Die Wartezeit nach dem Kampf gilt fuer die eigene
 -- Reise: so lange wartet der Autopilot, bevor er weiterlaeuft.
 --
 -- Verbrauchsgueter (Flaeschchen, Elixiere, Schriftrollen) sind keine Strategien des Servers,
@@ -640,7 +640,7 @@ local function Build()
    -- Freitext
    local exLbl = c:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
    exLbl:SetPoint("TOPLEFT", 16, yr)
-   exLbl:SetText("Zusaetzliche Befehle, mit Semikolon getrennt (z. B. ll normal; ll skill)")
+   exLbl:SetText("Zusaetzliche Befehle, mit Semikolon getrennt (z. B. ll all; ll gray)")
 
    extraEdit = CreateFrame("EditBox", "AutoTravelProfileExtra", c, "InputBoxTemplate")
    extraEdit:SetPoint("TOPLEFT", 20, yr - 18)

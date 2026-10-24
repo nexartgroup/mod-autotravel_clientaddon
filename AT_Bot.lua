@@ -140,12 +140,24 @@ end
 -- Druiden ist "dps" die Katzenform (unter Stufe 20 ohne Gestalt) und "heal" die
 -- Wiederherstellung, die nicht angreift. Deshalb setzen die Profile nur
 -- klassenneutrale Strategien.
+-- Beute-Filter "ll": jedes feste Profil sendet "ll all". "ll" kennt nur all/*, gray/g und
+-- disenchant; jeder andere Wert (auch "skill") wird zu "normal" (LootStrategyValue::instance).
+-- "ll normal" nimmt nur, was der Bot "brauchen" kann: Ausruestung, Questgegenstaende und alles
+-- mit Verkaufspreis. Der Rest bleibt in der Leiche -- das sah aus wie unsauberes Looten, und
+-- erst "ll all" half. Dazu kommt, dass im Selbstmodus JEDES Beutefenster des Charakters durch
+-- dieselbe Aktion laeuft ("loot response" -> "store loot", mod-playerbots, Hook OnPacketSent):
+-- auch das, das der Spieler von Hand oeffnet. Sie nimmt die erlaubten Gegenstaende und schliesst
+-- das Fenster. Mit "ll normal" waere der Rest dann auch von Hand nicht mehr zu holen -- selbst
+-- in den Profilen, die den Bot nicht looten lassen. Deshalb gilt "ll all" fuer alle.
+B.LOOT_FILTER = "ll all"
+
 B.Builtin = {
    {
       key = "minimal", name = "Minimal",
       desc = "Nur laufen. Der Bot greift nicht ein.",
       combat    = "-dps,-aoe,-boost,-grind,-heal,-tank",
       noncombat = "-grind,-new rpg,-loot,-follow,-food",
+      extra = { B.LOOT_FILTER },
       grace = 1.5,
    },
    {
@@ -153,6 +165,7 @@ B.Builtin = {
       desc = "Weicht aus, greift nicht an.",
       combat    = "-dps,-aoe,-boost,-grind,-tank,+threat,+avoid aoe",
       noncombat = "-grind,-new rpg,-loot,-follow,+food",
+      extra = { B.LOOT_FILTER },
       grace = 1.5,
    },
    {
@@ -160,6 +173,7 @@ B.Builtin = {
       desc = "Wehrt sich, sucht aber keinen Kampf.",
       combat    = "+dps assist,+avoid aoe,-aoe,-grind,-boost",
       noncombat = "-grind,-new rpg,-loot,-follow,+food",
+      extra = { B.LOOT_FILTER },
       grace = 2.0,
    },
    {
@@ -167,14 +181,13 @@ B.Builtin = {
       desc = "Wehrt sich mit vollem Repertoire und pluendert Gegner (ohne Ressourcen).",
       combat    = "+dps assist,+aoe,+avoid aoe,-grind",
       -- Frueher stand hier "-loot": das Profil nannte sich "Normal" und lootete
-      -- nie. Die nc-Strategie "loot" nimmt die Beute auf, "ll normal" legt fest,
-      -- was ("ll" kennt nur all/*, gray/g und disenchant; alles andere gilt als
-      -- "normal"). Die laengere Wartezeit gibt dem Bot Zeit zum Looten, bevor
+      -- nie. Die nc-Strategie "loot" nimmt die Beute auf, "ll all" (siehe oben)
+      -- legt fest, was. Die laengere Wartezeit gibt dem Bot Zeit zum Looten, bevor
       -- der Autopilot weiterlaeuft. "nc !" stellt "gather" (Beruferessourcen)
       -- als Standard an; "-gather" haelt Normal bei der Beute von Gegnern, das
       -- bleibt der Unterschied zu "Plus".
       noncombat = "+loot,-gather,-grind,-new rpg,-follow,+food",
-      extra = { "ll normal" },
+      extra = { B.LOOT_FILTER },
       loot = true, grace = 7.0,
    },
    {
@@ -182,18 +195,16 @@ B.Builtin = {
       desc = "Greift alles an und pluendert die Beute.",
       combat    = "+dps assist,+aoe,+boost,+grind",
       noncombat = "+loot,-new rpg,-follow,+food",
-      extra = { "ll normal" },
+      extra = { B.LOOT_FILTER },
       loot = true, grace = 7.0,
    },
    {
       key = "plus", name = "Plus",
       desc = "Wehrt sich, pluendert Gegner, sammelt Beruferessourcen.",
       combat    = "+dps assist,+aoe,+avoid aoe,-grind",
-      -- "ll" kennt nur all/*, gray/g und disenchant; jeder andere Wert (auch
-      -- "skill") wird zu "normal" (LootStrategyValue::instance). Ressourcen
-      -- sammelt die nc-Strategie "gather".
+      -- Ressourcen sammelt die nc-Strategie "gather".
       noncombat = "+loot,+gather,-grind,-new rpg,-follow,+food",
-      extra = { "ll normal" },
+      extra = { B.LOOT_FILTER },
       loot = true, grace = 7.0,
    },
 }
@@ -339,6 +350,39 @@ end
 
 function B.ResetAllBuiltin()
    B.Global().builtin = {}
+end
+
+-- 11.9: "ll all" ersetzt in allen festen Profilen "ll normal" (und das Fehlen eines Beutefilters). Ein
+-- gespeicherter Schnappschuss eines festen Profils haelt den alten Standard fest -- der Spieler hat nur etwas
+-- anderes im Editor geaendert (die Wartezeit, eine Flagge) und bekaeme sonst nie das neue Verhalten. Wo die
+-- Zusatzbefehle noch GENAU dem alten Standard entsprechen, werden sie einmal auf den neuen gesetzt; alles
+-- andere bleibt, wie der Spieler es gestellt hat. Danach laeuft das nie wieder: wer "ll normal" bewusst
+-- zurueckstellt, behaelt es.
+local PRE_119_EXTRA = {
+   minimal = "", aengstlich = "", verteidigen = "",
+   normal = "ll normal", aggressiv = "ll normal", plus = "ll normal",
+}
+
+-- Rueckgabe: true, wenn etwas geaendert wurde.
+function B.MigrateLootFilter()
+   local g = B.Global()
+   if g.lootFilterMigrated then return false end
+   g.lootFilterMigrated = true
+
+   local changed = false
+   for key, old in pairs(PRE_119_EXTRA) do
+      local o = g.builtin[key]
+      if type(o) == "table" then
+         local cur = table.concat(B.SplitExtra(type(o.extra) == "string" and o.extra or ""), "; ")
+         if cur == old then
+            o.extra = B.LOOT_FILTER
+            changed = true
+         end
+         -- Wiederholt der Schnappschuss damit nur noch den Standard, ist er ueberfluessig.
+         B.NormalizeBuiltin(key)
+      end
+   end
+   return changed
 end
 
 -- Zusatzbefehle "a; b" -> { "a", "b" }
@@ -593,6 +637,10 @@ function B.OnSystemMessage(msg)
       B.active = true
       AT.Debug("Selbstmodus vom Server bestaetigt: aktiv")
       Reconcile()
+      -- Erst jetzt steht fest, dass es einen Bot gibt: ohne ihn geht kein Beutefenster durch seine Aktion,
+      -- und eine Warnung vor vollen Taschen waere falsch (der Server kann den Selbstmodus verweigern).
+      -- Nur bei Playerbot-Steuerung: wer den Selbstmodus von Hand fuehrt, will vom Addon dazu nichts hoeren.
+      if AT.GetBool("BotControl") then B.WarnBagsFull() end
       if AT.UI then AT.UI.Update() end
       return true
    end
@@ -783,6 +831,58 @@ function B.ApplyProfile(formOnly)
    AT.Print("Profil: |cffffffff" .. p.name .. "|r - " .. p.desc)
 end
 
+-- ---------------------------------------------------------------------------
+-- Volle Taschen
+-- ---------------------------------------------------------------------------
+--
+-- mod-playerbots (StoreLootAction): ist "bag space" ueber 80, nimmt der Bot aus einem Beutefenster keinen
+-- Einzelgegenstand mehr (Ausruestung, Taschen) und von Stapelware nur, was auf einen angebrochenen Stapel
+-- passt -- und schliesst das Fenster. Im Selbstmodus gilt das nach dem Quelltext fuer JEDES Beutefenster des
+-- Charakters, auch fuer eines, das der Spieler selbst oeffnet (IsRealPlayer() ist fuer den Spieler eines
+-- Selbstmodus falsch, die Ausnahme fuer echte Spieler greift hier nicht). "ll all" aendert daran nichts: die
+-- Pruefung kommt nach dem Beutefilter.
+
+B.BAG_LIMIT = 80
+
+-- Wie voll die Taschen sind, gerechnet wie der Bot ("bag space", StatsValues.cpp): benutzte Plaetze im
+-- Rucksack und in den NORMALEN Taschen (keine Berufs-, Koecher- oder Munitionstaschen), in Prozent, die
+-- Nachkommastellen abgeschnitten. nil, wenn der Client die Taschen nicht abfragen laesst.
+function B.BagFill()
+   if not GetContainerNumSlots or not GetContainerNumFreeSlots then return nil end
+   local total, used = 0, 0
+   for bag = 0, 4 do
+      local size = GetContainerNumSlots(bag) or 0
+      if size > 0 then
+         local free, family = GetContainerNumFreeSlots(bag)
+         if free and (bag == 0 or family == 0) then
+            total = total + size
+            used = used + (size - free)
+         end
+      end
+   end
+   if total == 0 then return nil end
+   return math.floor(used * 100 / total)
+end
+
+-- Meldet es, wenn die Taschen so voll sind, dass der Bot nichts Einzelnes mehr aufnimmt -- einmal, solange
+-- sie voll bleiben: wer mit vollen Taschen reist, soll nicht bei jedem Start dieselbe Zeile lesen. Eine
+-- Pruefung mit Platz scharft die Meldung wieder.
+-- Rueckgabe: true, wenn gemeldet wurde.
+B.bagWarned = false
+
+function B.WarnBagsFull()
+   local fill = B.BagFill()
+   if not fill or fill <= B.BAG_LIMIT then B.bagWarned = false return false end
+   if B.bagWarned then return false end
+   B.bagWarned = true
+   AT.Warn(string.format("Taschen zu %d %% voll: ab ueber %d %% nimmt der Bot keine Einzelgegenstaende mehr aus " ..
+                         "der Beute (Ausruestung, Taschen, auch Questgegenstaende und Schluessel) und Stapelware nur, " ..
+                         "wenn sie auf einen angebrochenen Stapel passt -- und schliesst das Beutefenster danach " ..
+                         "(mod-playerbots; auch bei einem Fenster, das du selbst oeffnest). 'll all' aendert daran " ..
+                         "nichts: Platz schaffen.", fill, B.BAG_LIMIT))
+   return true
+end
+
 -- Haltung des Begleiters (Jaeger, Hexenmeister, Todesritter, Magier, Priester ...). Der Befehl
 -- "pet <Haltung>" gilt fuer Begleiter und Waechter des Bots. Ohne Begleiter antwortet der Bot
 -- mit einer Fehlermeldung, deshalb wird nur gesendet, wenn einer da ist; ruft der Spieler ihn
@@ -863,6 +963,7 @@ function B.Enable(silent)
       SendSelf(AT.Get("SelfOnCommand"), true)
    else
       AT.Debug("Selbstmodus laeuft bereits - nur Profil setzen.")
+      B.WarnBagsFull()
    end
    B.active = true
    B.ApplyProfile()

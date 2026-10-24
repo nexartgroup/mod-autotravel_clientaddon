@@ -34,7 +34,10 @@ ab.
 ## Bedienung
 
 **Ziel setzen** in Carbonite (ein Goto-Wegpunkt; AutoTravel liest das Ziel und
-die Wegpunkte dorthin aus). Dann:
+die Wegpunkte dorthin aus). Mehrere Ziele lassen sich verketten (in Carbonite Strg +
+Umschalt + Linksklick auf die Karte): AutoTravel laeuft sie der Reihe nach ab, statt
+nur zum letzten zu fahren (ab 11.9 mit einem Servermodul ab 4.0.8, siehe
+"Wegpunktketten" unten). Dann:
 
 | | |
 |---|---|
@@ -100,7 +103,9 @@ Die Pruefung bleibt beim Server; die gesperrten Knoepfe sind nur Komfort.
 | `/at info` | Version, Verbindung, Faehigkeiten, Einstellungen |
 | `/at hello` | Servermodul erneut abfragen |
 | `/at diag` | warum scheitert der Pfad zu diesem Ziel? |
-| `/at target`, `/at route`, `/at koords` | erkanntes Ziel, Wegpunkte, Weltkoordinaten |
+| `/at target`, `/at route`, `/at koords` | erkanntes Ziel, Route mit den Wegpunkten (`[Wegpunkt]`), Weltkoordinaten |
+| `/at route roh` | Fehlersuche: was Carbonite unter `.Tar` (gesetzte Ziele) und `.Tra1` (berechnete Route) ablegt (ab 11.9) |
+| `/at wegpunkte [ziele \| alle \| aus]` | `ziele` (Standard): die in Carbonite verketteten Ziele einzeln anlaufen; `alle`: jeden Punkt der Route; `aus`: nur das letzte Ziel zaehlt, wie bis 11.8 (ab 11.9) |
 | `/at knoten` | Zustand des Playerbot-Knotengraphen |
 | `/at ziel <yd>` | Zielradius der eigenen Reise |
 | `/at ruhe <s>` | Ruhezeit bis zur Uebernahme |
@@ -160,7 +165,7 @@ Umschalter und koennte ihn sonst einschalten).
 ### Profile
 
 Sechs vorgegebene Profile (Minimal, Aengstlich, Verteidigen, Normal, Aggressiv, Plus) und
-drei eigene. **Normal** lootet: es setzt `nc +loot` und `ll normal` und wartet nach dem Kampf
+drei eigene. **Normal** lootet: es setzt `nc +loot` und `ll all` und wartet nach dem Kampf
 7 s, damit der Bot die Beute aufnehmen kann, bevor der Autopilot weiterlaeuft. (Bis 11.0
 stand dort `-loot`, das Profil nannte sich Normal und lootete nie.) Normal sammelt dabei keine
 Berufsressourcen (`-gather`; `nc !` schaltet `gather` sonst von selbst an) -- das ist der
@@ -215,7 +220,7 @@ von mod-playerbots, nicht geraten:
 |---|---|---|
 | Heiltraenke benutzen | Kampfstrategie `potions`: Gesundheitsstein oder Heiltrank bei kritischer Gesundheit, Manatrank bei wenig Mana. Der Server schaltet sie von sich aus **an** | Kampfflagge `potions` |
 | Rezepte lernen, verzaubern, Questgegenstaende benutzen | Nichtkampfstrategie `maintenance` (Standard: **aus**): bei Gelegenheit `use random recipe`, `enchant random item` und `disenchant random item` (Beruf noetig), `use random quest item`, Questlog aufraeumen, Quests teilen und `smart destroy item` | Nichtkampfflagge `maintenance` -- nur als Buendel, die Teile lassen sich nicht einzeln schalten |
-| Questobjekte einsammeln | steckt in `nc +loot`: der Bot nimmt Leichen **und Objekte** in der Naehe auf, auch Questobjekte, fuer die eine Quest laeuft; `ll normal` laesst Questgegenstaende zu | Nichtkampfflagge `loot` (schon vorhanden: Normal, Aggressiv, Plus) |
+| Questobjekte einsammeln | steckt in `nc +loot`: der Bot nimmt Leichen **und Objekte** in der Naehe auf, auch Questobjekte, fuer die eine Quest laeuft; `ll all` nimmt alles, was in der Leiche liegt | Nichtkampfflagge `loot` (schon vorhanden: Normal, Aggressiv, Plus) |
 | Haltung des Begleiters | Chatbefehl `pet aggressive`, `pet defensive`, `pet passive` (kein Strategiewert) | Knopf *Haltung* im Profil: unveraendert / aggressiv / defensiv / passiv |
 | Schriftrollen, Elixiere, Flaeschchen benutzen | **keine Strategie**: der Bot benutzt sie nie von selbst (`buff` zeigt sie nur an, `s`/`b`/`give` verkaufen oder verschieben sie). Er kennt aber den Befehl `u <Gegenstand>` -- das Addon liest die Taschen und fluestert ihn (ab 11.6, siehe unten) | Kaestchen *Flaeschchen*, *Elixiere*, *Schriftrollen* im Profil |
 
@@ -396,6 +401,61 @@ Regler nur seinen letzten Wert meldet. Das Format der Nachrichten und die
 Versionsregeln stehen in der README von mod-autotravel (Abschnitt "Protokoll").
 Das Addon spricht Protokoll 4 und versteht auch Module mit Protokoll 3.
 
+## Aenderungen in 11.9
+
+* **Verkettete Carbonite-Ziele werden der Reihe nach abgelaufen.** Bisher zaehlte nur der letzte Punkt: ab 300 yd
+  Luftlinie ersetzte die Planung des Servermoduls (Flugmeister, Knotengraph) die ganze Route und liess die Ziele
+  dazwischen weg. Jetzt markiert das Addon die gesetzten Ziele als **Wegpunkte** (im Befehl `.at route` die
+  Art `2`), und ein Servermodul ab **4.0.8** plant nur den Weg *zwischen* zwei Wegpunkten -- Flug, Schiff oder
+  Portal gegebenenfalls je Abschnitt neu, von der tatsaechlichen Position aus. Das Panel zaehlt dann
+  *Wegpunkt 2/4* statt *Etappe*. Ein Wegpunkt, den der Charakter nicht erreicht (Felswand, See), wird mit
+  Meldung uebersprungen; das Endziel gibt dagegen auf.
+* **Woran das Addon die Wegpunkte erkennt.** Carbonite legt die gesetzten Ziele unter `.Tar` ab und die berechnete
+  Route (mit Zonenuebergaengen, Torbogen, Flugpunkten) unter `.Tra1`. Mit mindestens zwei Zielen gleicht das Addon
+  beides ab: findet jedes Ziel seinen eigenen Punkt in der Route (gleiche Karte, hoechstens 1,5 Carbonite-Einheiten
+  Abstand, rund 7 yd), sind genau diese Punkte Wegpunkte und die Punkte dazwischen Stuetzpunkte; sonst gilt die Kette
+  der gesetzten Ziele allein. Ein einzelnes Ziel bleibt, was es war. **Das ist ohne Carbonite im Spiel gebaut**
+  (Carbonites Datenablage laesst sich hier nicht einsehen): `/at route` zeigt, welche Punkte als Wegpunkt gelten
+  (und, wie sie erkannt wurden), `/at route roh` die Rohdaten von `.Tar` und `.Tra1`.
+* **Betriebsart** (`/at wegpunkte [ziele | alle | aus]`; in den Optionen ein Knopf, der reihum schaltet):
+  * `ziele` (Standard): die gesetzten Ziele, wie oben.
+  * `alle`: jeder Punkt der Route ausser Flugpunkten und dem Startpunkt ist ein Wegpunkt. Der Ausweg, falls
+    Carbonite die verketteten Ziele anders ablegt, als der Abgleich erwartet.
+  * `aus`: wie bis 11.8, nur das letzte Ziel zaehlt.
+
+  Name und Zielpunkt der Reise (auch `/at target`, Teleport, `/at diag`) kommen in jeder Betriebsart aus derselben
+  Liste wie die Route.
+* **Was sich nicht zuordnen laesst.** Ein Wegpunkt ausserhalb jeder bekannten Zone oder auf einer unbekannten Karte
+  wird im Chat gemeldet und uebersprungen. Das Endziel nie: ohne es faehrt die Reise nicht los -- bei einer Kette
+  auch nicht als Einzelziel zum ersten Wegpunkt und nicht mit einer geratenen Karte. (Ein einzelnes Ziel in einer
+  unbekannten Zone behaelt den Rueckgriff auf die aktuelle Karte, wie bis 11.8.) Mehr als 30 Punkte nimmt das
+  Addon nicht (der Server 32): dann entfallen die letzten Zwischenpunkte, das Endziel nie, mit Hinweis im Chat.
+  Beim Zusammenfassen dicht beieinanderliegender Punkte bleibt ein Wegpunkt ein Wegpunkt und behaelt seine Lage; Flug
+  und Wegpunkt zugleich (Art `3`) gibt es nicht.
+* **Altes Servermodul**: sobald der Server den Start angenommen hat, warnt das Addon ("Das Servermodul kennt noch
+  keine Wegpunktketten (ab 4.0.8): es faehrt nur zum letzten Punkt."), wenn eine Kette mit mindestens zwei Wegpunkten
+  geplant war und der Handschlag das Bit `64` nicht meldet (oder Protokoll 3). Ohne Handschlag, ohne Modul oder bei
+  einer Absage schweigt es. `/at info` nennt `+Wegpunktketten` bzw. `-Wegpunktketten`. Das Protokoll bleibt bei 4 (das
+  Art-Feld ist jetzt eine Bitmaske: `1` Flugpunkt, `2` Wegpunkt; aeltere Module lesen jeden anderen Wert als Laufweg).
+* **Beutefilter `ll all` in allen festen Profilen** (vorher `ll normal`, bei Minimal, Aengstlich und Verteidigen
+  nichts). `ll normal` nimmt nur, was der Bot brauchen kann -- Ausruestung, Questgegenstaende, alles mit
+  Verkaufspreis; der Rest bleibt in der Leiche, und das sieht aus wie unsauberes Looten. Dazu kommt (nach dem
+  Quelltext von mod-playerbots, nicht im Spiel geprueft): im Selbstmodus laeuft **jedes** Beutefenster des Charakters
+  durch dieselbe Aktion des Bots (`loot response` -> `store loot`), auch ein von Hand geoeffnetes. Sie nimmt die
+  erlaubten Gegenstaende und schliesst das Fenster; der Rest war dann auch von Hand nicht mehr zu holen -- bis
+  `ll all` gesendet wurde. Und jede Anwendung des Profils (jeder Reisebeginn) setzte `ll normal` wieder.
+  Ein von dir geaendertes festes Profil behaelt seine Aenderungen; nur wenn dessen Zusatzbefehle noch genau dem
+  fruehere Standard entsprechen (`ll normal`, bei Minimal, Aengstlich und Verteidigen keine), setzt das Addon beim
+  Laden einmal `ll all` ein. Wer `ll normal` danach bewusst zurueckstellt, behaelt es.
+* **Warnung bei vollen Taschen**, sobald der Server den Selbstmodus bestaetigt (oder bei einem Reisebeginn, wenn er
+  schon laeuft) -- nur mit Playerbot-Steuerung und nie, wenn der Server den Selbstmodus verweigert. Ist der Fuellstand
+  (Rucksack und normale Taschen, gerechnet wie der Bot, auf ganze Prozent abgerundet) ueber 80 %, nimmt der Bot keine
+  Ausruestung und keine Taschen mehr aus der Beute und schliesst das Fenster -- unabhaengig vom Beutefilter. Die
+  Meldung kommt einmal, solange die Taschen voll bleiben.
+* Tests: rund 890 neue Pruefungen (3571 insgesamt, vorher 2682); 111 absichtlich eingebaute Fehler werden alle
+  erkannt. Die Erkennung der Wegpunkte ist mit Attrappen von `.Tar` und `.Tra1` geprueft, **nicht gegen Carbonite**.
+* Das Protokoll bleibt bei 4; neu ist die Faehigkeit `64` (Wegpunktketten) im Handschlag.
+
 ## Aenderungen in 11.8
 
 * **Wartezeit nach dem Kampf in den Einstellungen** (*Interface -> AddOns -> AutoTravel*, Abschnitt
@@ -537,6 +597,9 @@ reagiert bzw. welche Strategien der Bot gerade hat.
 | Optionen "Natuerliche Navigation" grau | serverweit, nur fuer Spielleiter |
 | "Der Server verweigert den Playerbot-Selbstmodus" | `AiPlayerbot.SelfBotLevel` am Server |
 | Weg wird nicht gefunden | `/at diag`; fehlen mmaps/vmaps fuer die Kachel? |
+| Verkettete Ziele werden nicht einzeln angelaufen | `/at route` zeigt mit `[Wegpunkt]`, was als Wegpunkt gilt; `/at route roh` die Rohdaten von Carbonite; hilft nichts, `/at wegpunkte alle` |
+| "... kennt noch keine Wegpunktketten (ab 4.0.8)" | das Servermodul ist aelter als 4.0.8 und faehrt nur zum letzten Punkt; `/at info` zeigt `-Wegpunktketten` |
+| "Taschen zu ... voll" | der Bot nimmt ueber 80 % Fuellstand keine Einzelgegenstaende mehr; Platz schaffen, `ll all` aendert daran nichts |
 | Ein Knopf im Panel reagiert nicht | `/at ui`: zeigt, ob er gesperrt ist, ob Klicks ankommen und was unter der Maus liegt |
 
 `/at debug` zeigt jeden gesendeten Befehl und die Diagnosemeldungen des Servers.
@@ -551,7 +614,9 @@ fest eingestellt hast (`consStat`).
 Beim Aktualisieren aus einer aelteren Fassung bleiben alle Werte erhalten; fehlende
 neue Einstellungen erhalten Standardwerte. Der fruehere Standardbefehl
 `.playerbots bot self on/off` wird auf den heutigen Umschalter umgestellt, falls du
-ihn nie geaendert hast.
+ihn nie geaendert hast. Ebenso (einmal, mit 11.9) der Beutefilter eines geaenderten festen
+Profils, wenn dessen Zusatzbefehle noch genau dem frueheren Standard entsprachen
+(`AutoTravelGlobalDB.lootFilterMigrated` merkt es sich).
 
 ## Pruefen ohne Spiel
 
