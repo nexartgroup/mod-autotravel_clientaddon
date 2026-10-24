@@ -396,16 +396,36 @@ local function Build()
       end))
    Advance(46)
 
-   -- Wegpunktketten. Verkettete Ziele (Strg + Umschalt + Linksklick auf die Carbonite-Karte) werden
-   -- immer einzeln angelaufen; der Haken dehnt das auf jeden Punkt der berechneten Route aus.
-   O.waypointCheck = Check(c, "Jeden Punkt der Carbonite-Route einzeln anlaufen",
-      "Aus: AutoTravel laeuft die Ziele, die du in Carbonite selbst verkettet hast (Strg + Umschalt + " ..
-      "Linksklick auf die Karte), der Reihe nach ab und plant nur den Weg dazwischen. Ein: auch jeder " ..
-      "Zwischenpunkt, den Carbonite selbst berechnet (Zonenuebergaenge, Torbogen), ist ein Pflichtpunkt. " ..
-      "Hilft, wenn deine verketteten Ziele nicht als Wegpunkte erkannt werden: '/at route' zeigt, welche " ..
-      "Punkte als Wegpunkt gelten, '/at route roh' die Rohdaten von Carbonite.",
-      16, y, "AllWaypoints")
-   table.insert(widgets, O.waypointCheck)
+   -- Wegpunktketten (siehe CB.GetRoute). Drei Betriebsarten, ein Knopf schaltet reihum.
+   local WP_TEXT = {
+      ziele = "Wegpunkte: verkettete Ziele",
+      alle  = "Wegpunkte: jeder Routenpunkt",
+      aus   = "Wegpunkte: aus",
+   }
+   local WP_NEXT = { ziele = "alle", alle = "aus", aus = "ziele" }
+
+   O.waypointButton = AT.UI.Button(c, 230, 22, "", function()
+      AT.Set("WaypointMode", WP_NEXT[AT.WaypointMode()])
+      O.waypointButton.Load()
+   end)
+   O.waypointButton:SetPoint("TOPLEFT", 20, y)
+   O.waypointButton.Load = function()
+      O.waypointButton.label:SetText(WP_TEXT[AT.WaypointMode()])
+   end
+   O.waypointButton.tip = function()
+      GameTooltip:AddLine("Verkettete Carbonite-Ziele")
+      GameTooltip:AddLine("Verkettete Ziele (Strg + Umschalt + Linksklick auf die Carbonite-Karte) laufen der " ..
+                          "Reihe nach ab; AutoTravel plant nur den Weg dazwischen. Ein Klick schaltet weiter:", 0.7, 0.7, 0.7, true)
+      GameTooltip:AddLine(" ")
+      GameTooltip:AddLine("verkettete Ziele: die Ziele, die du gesetzt hast (Standard)", 0.55, 0.6, 0.68, true)
+      GameTooltip:AddLine("jeder Routenpunkt: auch jeder Zwischenpunkt, den Carbonite selbst berechnet " ..
+                          "(Zonenuebergaenge, Torbogen). Hilft, wenn deine Ziele nicht erkannt werden.", 0.55, 0.6, 0.68, true)
+      GameTooltip:AddLine("aus: nur das letzte Ziel zaehlt, der Weg dorthin wird geplant (wie bis 11.8)", 0.55, 0.6, 0.68, true)
+      GameTooltip:AddLine(" ")
+      GameTooltip:AddLine("'/at route' zeigt, welche Punkte als Wegpunkt gelten; '/at route roh' die Rohdaten von Carbonite.",
+                          0.55, 0.6, 0.68, true)
+   end
+   table.insert(widgets, O.waypointButton)
    Advance(34)
 
    -- ---- Uebergabe -------------------------------------------------------

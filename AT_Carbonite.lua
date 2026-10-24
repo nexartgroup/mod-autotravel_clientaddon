@@ -73,14 +73,14 @@ local function IsTaxiLeg(e)
 end
 
 -- Ein Eintrag von Carbonite als Etappe, oder nil, wenn er keine Kontinentkoordinaten hat.
--- 'target': der Eintrag ist ein vom Spieler gesetztes Ziel. Ein Flugpunkt ist er dann nur, wenn
--- Carbonite ihn so kennzeichnet (Mod == "F"), nicht schon, weil sein Name "Flug" enthaelt: ein
--- Ziel wie "Flugmeister Bob" (eine Quest schickt dorthin) darf keinen Flug ausloesen.
+-- 'target': der Eintrag ist ein vom Spieler gesetztes Ziel. Das ist nie ein Flugpunkt, auch wenn
+-- sein Name "Flug" enthaelt ("Flugmeister Bob": eine Quest schickt dorthin) -- er soll angelaufen
+-- werden, nicht den Abflug ausloesen. Ein Wegpunkt, der zugleich Flugpunkt waere, gibt es nicht.
 local function ReadLeg(e, i, target)
    if type(e) ~= "table" then return nil end
    if type(e.TMX) ~= "number" or type(e.TMY) ~= "number" then return nil end
-   local taxi
-   if target then taxi = (e.Mod == "F") else taxi = IsTaxiLeg(e) end
+   local taxi = false
+   if not target then taxi = IsTaxiLeg(e) end
    return {
       name     = e.TaN1 or ("Wegpunkt " .. i),
       cx       = e.TMX,
@@ -137,37 +137,44 @@ end
 --
 -- waypoint = true: ein Ziel, das der Spieler selbst gesetzt hat (Pflichtpunkt). Das gibt es nur,
 -- wenn mindestens zwei Ziele gesetzt sind -- ein einzelnes Ziel ist das Endziel, das ohnehin
--- immer zaehlt. Drei Wege, sie zu erkennen:
+-- immer zaehlt. Betriebsart 'mode' (Einstellung "Wegpunkte", /at wegpunkte):
 --
---   * Die Route besteht aus den gesetzten Zielen selbst (.Tra1 leer, Rueckfall auf .Tar):
---     alle sind Wegpunkte.
---   * Jedes gesetzte Ziel findet seinen Punkt in der berechneten Route .Tra1: diese Punkte sind
---     die Wegpunkte, alles dazwischen sind Stuetzpunkte von Carbonite.
---   * Sonst (die Route kennt nicht alle Ziele) gilt die Kette der gesetzten Ziele allein.
---
--- allPoints (Einstellung "Alle Punkte der Carbonite-Route einzeln anlaufen"): jeder Punkt der
--- Route ausser Flugpunkten ist ein Wegpunkt, ohne Abgleich mit .Tar. Fuer den Fall, dass
--- Carbonite die Ziele anders ablegt, als der Abgleich erwartet.
+--   "ziele" (Standard)  Drei Wege, die gesetzten Ziele zu erkennen:
+--       * Die Route besteht aus den gesetzten Zielen selbst (.Tra1 leer, Rueckfall auf .Tar):
+--         alle sind Wegpunkte. ("ziele")
+--       * Jedes gesetzte Ziel findet seinen Punkt in der berechneten Route .Tra1: diese Punkte
+--         sind die Wegpunkte, alles dazwischen sind Stuetzpunkte von Carbonite. ("abgleich")
+--       * Sonst (die Route kennt nicht alle Ziele) gilt die Kette der gesetzten Ziele allein.
+--         ("route") In diesen beiden Faellen gilt die Reihenfolge von .Tar; nur der Abgleich
+--         folgt der Reihenfolge der Route.
+--   "alle"   jeder Punkt der Route ausser Flugpunkten ist ein Wegpunkt, ohne Abgleich mit .Tar.
+--            Fuer den Fall, dass Carbonite die Ziele anders ablegt, als der Abgleich erwartet.
+--   "aus"    keine Wegpunkte: die Route wie bis 11.8 (nur das letzte Ziel zaehlt).
 --
 -- Zweiter Rueckgabewert: wie die Wegpunkte erkannt wurden ("einzel", "ziele", "route", "abgleich",
--- "alle"), fuer Meldungen und /at route.
-function CB.GetRoute(allPoints)
+-- "alle", "aus"), fuer Meldungen und /at route.
+function CB.GetRoute(mode)
    local map = GetMap()
    if not map then return nil end
+   if mode ~= "alle" and mode ~= "aus" then mode = "ziele" end
 
+   -- Was Carbonite ablegt, kommt von ausserhalb: kein Eintrag darf einen Fehler ausloesen, auch
+   -- nicht, wenn .Tra1 oder .Tar keine Liste sind.
    local src = map.Tra1
    local usedTar = false
-   if not src or #src == 0 then src = map.Tar usedTar = true end
-   if not src or #src == 0 then return nil end
+   if type(src) ~= "table" or #src == 0 then src = map.Tar usedTar = true end
+   if type(src) ~= "table" or #src == 0 then return nil end
 
-   -- Nur wenn die Route aus .Tar gelesen wird, sind ihre Eintraege gesetzte Ziele. (Vor der Kette
-   -- galt auch dort die Namensregel fuer Flugpunkte; sie zaehlte nur bei mehr als einem Punkt.)
-   local legs = ReadList(src, usedTar)
+   -- Nur wenn die Route aus .Tar gelesen wird, sind ihre Eintraege gesetzte Ziele ("aus" liest sie
+   -- wie bis 11.8, mit der Namensregel fuer Flugpunkte).
+   local legs = ReadList(src, usedTar and mode ~= "aus")
    if #legs == 0 then return nil end
+
+   if mode == "aus" then return legs, "aus" end
 
    local how = "einzel"
 
-   if allPoints then
+   if mode == "alle" then
       -- Ein erster Punkt, der praktisch auf dem Spieler liegt, ist der Start der Route und kein Ziel.
       local px, py = CB.GetPlayerCarb()
       for i = 1, #legs do
@@ -252,16 +259,17 @@ end
 function CB.HasTarget()
    local map = GetMap()
    if not map then return false end
-   if map.Tra1 and #map.Tra1 > 0 then return true end
-   if map.Tar and #map.Tar > 0 then return true end
+   if type(map.Tra1) == "table" and #map.Tra1 > 0 then return true end
+   if type(map.Tar) == "table" and #map.Tar > 0 then return true end
    return false
 end
 
--- Das eigentliche Ziel: der LETZTE Routenpunkt.
+-- Das eigentliche Ziel: der LETZTE Routenpunkt. 'mode' wie bei GetRoute: Ziel und Route einer Reise
+-- muessen aus derselben Liste kommen, sonst trueg die Reise den Namen eines anderen Punkts.
 -- Rueckgabe: Tabelle oder nil
 --   { cx, cy, name, mapIndex, mapName, taxi, legs, sig }
-function CB.GetDestination()
-   local legs = CB.GetRoute()
+function CB.GetDestination(mode)
+   local legs = CB.GetRoute(mode)
    if not legs then return nil end
    local last = legs[#legs]
    local taxi = false
@@ -283,8 +291,8 @@ end
 
 -- Zielposition als normalisierte Zonenkoordinaten 0..1 fuer das Servermodul.
 -- Rueckgabe: nx, ny, zonenname, mapIndex   oder   nil, fehlertext
-function CB.GetDestinationNormalized()
-   local d = CB.GetDestination()
+function CB.GetDestinationNormalized(mode)
+   local d = CB.GetDestination(mode)
    if not d then return nil, "Kein Carbonite-Ziel gesetzt." end
    if not d.mapIndex then return nil, "Carbonite liefert keinen Kartenindex zum Ziel." end
 

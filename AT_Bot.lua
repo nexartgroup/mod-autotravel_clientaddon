@@ -352,6 +352,39 @@ function B.ResetAllBuiltin()
    B.Global().builtin = {}
 end
 
+-- 11.9: "ll all" ersetzt in allen festen Profilen "ll normal" (und das Fehlen eines Beutefilters). Ein
+-- gespeicherter Schnappschuss eines festen Profils haelt den alten Standard fest -- der Spieler hat nur etwas
+-- anderes im Editor geaendert (die Wartezeit, eine Flagge) und bekaeme sonst nie das neue Verhalten. Wo die
+-- Zusatzbefehle noch GENAU dem alten Standard entsprechen, werden sie einmal auf den neuen gesetzt; alles
+-- andere bleibt, wie der Spieler es gestellt hat. Danach laeuft das nie wieder: wer "ll normal" bewusst
+-- zurueckstellt, behaelt es.
+local PRE_119_EXTRA = {
+   minimal = "", aengstlich = "", verteidigen = "",
+   normal = "ll normal", aggressiv = "ll normal", plus = "ll normal",
+}
+
+-- Rueckgabe: true, wenn etwas geaendert wurde.
+function B.MigrateLootFilter()
+   local g = B.Global()
+   if g.lootFilterMigrated then return false end
+   g.lootFilterMigrated = true
+
+   local changed = false
+   for key, old in pairs(PRE_119_EXTRA) do
+      local o = g.builtin[key]
+      if type(o) == "table" then
+         local cur = table.concat(B.SplitExtra(type(o.extra) == "string" and o.extra or ""), "; ")
+         if cur == old then
+            o.extra = B.LOOT_FILTER
+            changed = true
+         end
+         -- Wiederholt der Schnappschuss damit nur noch den Standard, ist er ueberfluessig.
+         B.NormalizeBuiltin(key)
+      end
+   end
+   return changed
+end
+
 -- Zusatzbefehle "a; b" -> { "a", "b" }
 local function SplitExtra(text)
    local out = {}
@@ -604,6 +637,10 @@ function B.OnSystemMessage(msg)
       B.active = true
       AT.Debug("Selbstmodus vom Server bestaetigt: aktiv")
       Reconcile()
+      -- Erst jetzt steht fest, dass es einen Bot gibt: ohne ihn geht kein Beutefenster durch seine Aktion,
+      -- und eine Warnung vor vollen Taschen waere falsch (der Server kann den Selbstmodus verweigern).
+      -- Nur bei Playerbot-Steuerung: wer den Selbstmodus von Hand fuehrt, will vom Addon dazu nichts hoeren.
+      if AT.GetBool("BotControl") then B.WarnBagsFull() end
       if AT.UI then AT.UI.Update() end
       return true
    end
@@ -838,10 +875,11 @@ function B.WarnBagsFull()
    if not fill or fill <= B.BAG_LIMIT then B.bagWarned = false return false end
    if B.bagWarned then return false end
    B.bagWarned = true
-   AT.Warn(string.format("Taschen zu %d %% voll: ab ueber %d %% nimmt der Bot keine Ausruestung und keine Taschen " ..
-                         "mehr aus der Beute und schliesst das Beutefenster danach (mod-playerbots; auch bei einem " ..
-                         "Fenster, das du selbst oeffnest). 'll all' aendert daran nichts -- Platz schaffen.",
-                         fill, B.BAG_LIMIT))
+   AT.Warn(string.format("Taschen zu %d %% voll: ab ueber %d %% nimmt der Bot keine Einzelgegenstaende mehr aus " ..
+                         "der Beute (Ausruestung, Taschen, auch Questgegenstaende und Schluessel) und Stapelware nur, " ..
+                         "wenn sie auf einen angebrochenen Stapel passt -- und schliesst das Beutefenster danach " ..
+                         "(mod-playerbots; auch bei einem Fenster, das du selbst oeffnest). 'll all' aendert daran " ..
+                         "nichts: Platz schaffen.", fill, B.BAG_LIMIT))
    return true
 end
 
@@ -925,6 +963,7 @@ function B.Enable(silent)
       SendSelf(AT.Get("SelfOnCommand"), true)
    else
       AT.Debug("Selbstmodus laeuft bereits - nur Profil setzen.")
+      B.WarnBagsFull()
    end
    B.active = true
    B.ApplyProfile()

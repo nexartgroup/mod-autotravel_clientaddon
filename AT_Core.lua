@@ -79,9 +79,9 @@ local DEFAULTS = {
    ArriveYards   = 8,
    ArriveCustom  = 0,
 
-   -- Wegpunktketten: nur die in Carbonite gesetzten Ziele (0) oder jeden Punkt der berechneten Route (1)
-   -- einzeln anlaufen. Siehe CB.GetRoute.
-   AllWaypoints  = 0,
+   -- Wegpunktketten (siehe CB.GetRoute): "ziele" = die in Carbonite verketteten Ziele einzeln anlaufen,
+   -- "alle" = jeden Punkt der berechneten Route, "aus" = nur das letzte Ziel zaehlt (wie bis 11.8).
+   WaypointMode  = "ziele",
 
    -- Playerbot-Selbstmodus
    BotControl     = 1,
@@ -261,7 +261,7 @@ function AT.BuildTargetArgs()
       return nil, "Carbonite ist nicht geladen."
    end
 
-   local nx, ny, mapName, _, d = CB.GetDestinationNormalized()
+   local nx, ny, mapName, _, d = CB.GetDestinationNormalized(AT.WaypointMode())
    if not nx then return nil, ny end
 
    local uiMapId = AT.Get("ForcedMapId")
@@ -309,11 +309,11 @@ local function HasFlag(flag, bit)
 end
 AT.HasLegFlag = HasFlag
 
-local function JoinFlags(a, b)
-   local out = 0
-   if HasFlag(a, FLAG_TAXI) or HasFlag(b, FLAG_TAXI) then out = out + FLAG_TAXI end
-   if HasFlag(a, FLAG_WAYPOINT) or HasFlag(b, FLAG_WAYPOINT) then out = out + FLAG_WAYPOINT end
-   return out
+-- Betriebsart der Wegpunkterkennung; ein unbekannter gespeicherter Wert gilt als Standard.
+function AT.WaypointMode()
+   local m = AT.Get("WaypointMode")
+   if m == "alle" or m == "aus" then return m end
+   return "ziele"
 end
 
 -- Rueckgabe: Liste { map, nx, ny, flag, name }  oder nil, Fehlertext
@@ -321,7 +321,7 @@ end
 function AT.BuildRoute()
    if not CB.IsAvailable() then return nil, "Carbonite ist nicht geladen." end
 
-   local legs, how = CB.GetRoute(AT.GetBool("AllWaypoints"))
+   local legs, how = CB.GetRoute(AT.WaypointMode())
    if not legs then return nil, "Kein Carbonite-Ziel gesetzt." end
 
    local out = {}
@@ -335,7 +335,9 @@ function AT.BuildRoute()
       if zx and uiMapId and zx >= -5 and zx <= 105 and zy >= -5 and zy <= 105 then
          local nx = math.max(0, math.min(100, zx)) / 100
          local ny = math.max(0, math.min(100, zy)) / 100
-         local flag = (l.taxi and FLAG_TAXI or 0) + (l.waypoint and FLAG_WAYPOINT or 0)
+         -- Ein Wegpunkt ist nie zugleich Flugpunkt: er soll angelaufen werden. (CB.GetRoute setzt beides
+         -- nie zusammen; die Regel gilt dem Zusammenfassen unten.)
+         local flag = l.waypoint and FLAG_WAYPOINT or (l.taxi and FLAG_TAXI or 0)
          local prev = out[#out]
          -- Punkte, die praktisch aufeinander liegen, zusammenfassen
          if prev and prev.map == uiMapId
@@ -349,12 +351,23 @@ function AT.BuildRoute()
                prev.nx, prev.ny = nx, ny
                if i == #legs then prev.name = l.name end
             end
-            -- Die Markierungen beider Punkte bleiben erhalten (ein Wegpunkt wird nie zum Stuetzpunkt).
-            prev.flag = JoinFlags(prev.flag, flag)
+            -- Ein Wegpunkt wird beim Zusammenfassen nie zum Stuetzpunkt (und nie zum Flugpunkt). Sonst
+            -- bleibt die Art des ersten Punkts, wie bisher: die des zweiten faellt weg.
+            if HasFlag(flag, FLAG_WAYPOINT) then prev.flag = FLAG_WAYPOINT end
          else
             table.insert(out, { map = uiMapId, nx = nx, ny = ny, flag = flag, name = l.name })
          end
       else
+         -- Das Endziel selbst kann nicht wegfallen: ohne es ginge die Reise zum vorigen Punkt und
+         -- trueg trotzdem den Namen des Ziels. Ein Wegpunkt ist ein ausdruecklich gesetztes Ziel,
+         -- sein Wegfall gehoert in den Chat und nicht nur in die Fehlersuche.
+         if i == #legs then
+            return nil, string.format("Das Ziel '%s' liegt in keiner bekannten Zone der Karte.", sanitize(l.name))
+         end
+         if l.waypoint then
+            AT.Warn(string.format("Wegpunkt '%s' liegt in keiner bekannten Zone der Karte und wird uebersprungen.",
+                                  sanitize(l.name)))
+         end
          skipped = skipped + 1
       end
    end
@@ -467,7 +480,7 @@ local function Watchdog(needStatus)
 end
 
 function AT.Start()
-   local d = CB.IsAvailable() and CB.GetDestination() or nil
+   local d = CB.IsAvailable() and CB.GetDestination(AT.WaypointMode()) or nil
    local name = d and sanitize(d.name) or "Ziel"
 
    local route, rerr = AT.BuildRoute()
@@ -486,23 +499,28 @@ function AT.Start()
       if waypoints >= 2 then AT.chainTotal = waypoints end
       AT.Debug(string.format("Route mit %d Stuetzpunkten, davon %d Flugpunkte und %d Wegpunkte.",
                              #route, taxiLegs, waypoints))
-      if waypoints >= 2 and not N.Can("WAYPOINTS") then
-         -- Ein Modul vor 4.0.8 liest die Wegpunkte als gewoehnliche Stuetzpunkte und plant ab dem
-         -- Endziel allein; die Zwischenziele gehen dabei verloren.
-         AT.Warn("Das Servermodul kennt noch keine Wegpunktketten (ab 4.0.8): es faehrt nur zum letzten Punkt.")
-      end
 
       AT.lastRx = 0
       local cmds = AT.PackRoute(route)
       for i = 1, #cmds do
          accepted = AT.Send(cmds[i], { tag = "start" })
-         if not accepted then return end
+         if not accepted then AT.chainTotal = 0 return end
       end
       accepted = AT.Send(string.format("at rstart %d %.5f %.5f %s", curMap, cnx, cny, name),
                          { tag = "start" })
    else
       -- Einzelziel: Carbonite liefert nur den Endpunkt
-      if not route then AT.Debug("Route nicht nutzbar (" .. tostring(rerr) .. ") - Einzelziel.") end
+      if not route then
+         -- Eine Kette, deren Route sich nicht bauen laesst, faehrt nicht als Einzelziel los: das liesse die
+         -- Zwischenziele still weg (und riete bei einem unbekannten Ziel die aktuelle Karte).
+         local legs = CB.GetRoute(AT.WaypointMode())
+         local marked = 0
+         for _, l in ipairs(legs or {}) do
+            if l.waypoint then marked = marked + 1 end
+         end
+         if marked >= 2 then AT.Warn(rerr) return end
+         AT.Debug("Route nicht nutzbar (" .. tostring(rerr) .. ") - Einzelziel.")
+      end
       local args, nameOrErr = AT.BuildTargetArgs()
       if not args then AT.Warn(nameOrErr) return end
       name = nameOrErr
@@ -541,9 +559,13 @@ function AT.BeginTripSupport()
    -- dann EINschalten.
    AT.supportOn = AT.GetBool("BotControl")
    if AT.Bot then AT.Bot.Enable() end
-   -- Mit dem Selbstmodus laeuft jedes Beutefenster durch den Bot; sind die Taschen zu voll, lassen sich
-   -- Gegenstaende auch von Hand nicht mehr aufnehmen. Besser vor der Reise sagen als danach suchen.
-   if AT.supportOn and AT.Bot and AT.Bot.WarnBagsFull then AT.Bot.WarnBagsFull() end
+
+   -- Der Server hat den Start angenommen, der Handschlag ist also durch. Ein Modul vor 4.0.8 liest die
+   -- Wegpunkte als gewoehnliche Stuetzpunkte und plant ab dem Endziel allein; die Zwischenziele gehen
+   -- dabei verloren. (Bei unbekanntem Stand schweigt das Addon, statt zu raten.)
+   if (AT.chainTotal or 0) >= 2 and N.SupportsWaypoints() == false then
+      AT.Warn("Das Servermodul kennt noch keine Wegpunktketten (ab 4.0.8): es faehrt nur zum letzten Punkt.")
+   end
 end
 
 -- true, solange ein gesendeter Start auf seine Annahme wartet
@@ -637,6 +659,7 @@ StaticPopupDialogs["AUTOTRAVEL_TP_CONFIRM"] = {
 local CAP_LABELS = {
    { "HANDOVER", "Uebergabe" }, { "ROUTE", "Route" }, { "TAXI", "Flugmeister" },
    { "TRANSPORT", "Transporte" }, { "TELEPORT", "Teleport" }, { "SETTINGS", "Serveroptionen" },
+   { "WAYPOINTS", "Wegpunktketten" },
 }
 
 function AT.PrintInfo()
@@ -655,7 +678,11 @@ function AT.PrintInfo()
                s.version, s.proto, s.nodes, s.sec))
       local caps = {}
       for _, c in ipairs(CAP_LABELS) do
-         table.insert(caps, (N.Can(c[1]) and "|cff53d17a+" or "|cff9099a8-") .. c[2] .. "|r")
+         -- Bei einem aelteren Modul ohne Faehigkeitsfeld sind die Knoepfe frei, weil sie nur Komfort
+         -- sind; Wegpunktketten kennt es sicher nicht.
+         local can = N.Can(c[1])
+         if c[1] == "WAYPOINTS" then can = (N.SupportsWaypoints() == true) end
+         table.insert(caps, (can and "|cff53d17a+" or "|cff9099a8-") .. c[2] .. "|r")
       end
       AT.Print("   " .. table.concat(caps, "  "))
       if not s.capsKnown then
@@ -695,6 +722,9 @@ ev:SetScript("OnEvent", function(self, event, arg1)
       if AutoTravelDB.SelfOffCommand == ".playerbots bot self off" then
          AutoTravelDB.SelfOffCommand = DEFAULTS.SelfOffCommand
       end
+
+      -- 11.9: der Beutefilter "ll all" in den festen Profilen erreicht auch gespeicherte Schnappschuesse.
+      if AT.Bot and AT.Bot.MigrateLootFilter then AT.Bot.MigrateLootFilter() end
    elseif event == "PLAYER_LOGIN" then
       if AT.UI then AT.UI.Build() end
       if AT.Options then AT.Options.Init() end
@@ -746,7 +776,9 @@ local function Help()
       "/at koords            Weltkoordinaten des Ziels anzeigen",
       "/at diag              Diagnose: warum scheitert der Pfad?",
       "/at knoten            Zustand des Playerbot-Knotengraphen",
-      "/at route             Stuetzpunkte der Carbonite-Route anzeigen",
+      "/at route             Stuetzpunkte der Carbonite-Route anzeigen (Wegpunkte markiert)",
+      "/at route roh         Rohdaten von Carbonite (.Tar, .Tra1) zur Fehlersuche",
+      "/at wegpunkte <ziele|alle|aus>  verkettete Ziele / jeden Routenpunkt einzeln anlaufen / aus",
       "/at profil            Profil wechseln (ohne Argument: Liste)",
       "/at profil bearbeiten Profil-Editor oeffnen",
       "/at profil reset <name|alle>  vorgegebene Profile auf den Standard",
@@ -999,19 +1031,24 @@ SlashCmdList["AUTOTRAVEL"] = function(input)
    elseif cmd == "wegpunkte" or cmd == "waypoints" then
       local arg = string.lower(AT.trim(rest or ""))
       if arg == "alle" or arg == "all" then
-         AT.Set("AllWaypoints", 1)
+         AT.Set("WaypointMode", "alle")
       elseif arg == "ziele" or arg == "auto" or arg == "gesetzt" then
-         AT.Set("AllWaypoints", 0)
+         AT.Set("WaypointMode", "ziele")
+      elseif arg == "aus" or arg == "off" then
+         AT.Set("WaypointMode", "aus")
       elseif arg ~= "" then
-         AT.Warn("Verwendung: /at wegpunkte [alle | ziele]")
+         AT.Warn("Verwendung: /at wegpunkte [ziele | alle | aus]")
          return
       end
       if AT.Options and AT.Options.Load then AT.Options.Load() end
-      if AT.GetBool("AllWaypoints") then
+      local m = AT.WaypointMode()
+      if m == "alle" then
          AT.Print("Wegpunkte: JEDER Punkt der Carbonite-Route wird einzeln angelaufen (Flugpunkte ausgenommen).")
+      elseif m == "aus" then
+         AT.Print("Wegpunkte: aus. Nur das letzte Ziel zaehlt; der Weg dorthin wird vom Servermodul geplant (wie bis 11.8).")
       else
-         AT.Print("Wegpunkte: nur die in Carbonite gesetzten Ziele werden einzeln angelaufen " ..
-                  "(Strg + Umschalt + Linksklick auf die Karte verkettet Ziele). '/at wegpunkte alle' laeuft jeden Punkt der Route ab.")
+         AT.Print("Wegpunkte: die in Carbonite verketteten Ziele (Strg + Umschalt + Linksklick auf die Karte) werden " ..
+                  "einzeln angelaufen. '/at wegpunkte alle' laeuft jeden Punkt der Route ab, '/at wegpunkte aus' nur das letzte Ziel.")
       end
 
    elseif cmd == "wartezeit" or cmd == "grace" then
