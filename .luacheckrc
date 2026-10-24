@@ -40,7 +40,7 @@ read_globals = {
    "GetMapContinents", "GetMapZones", "SetMapZoom", "GetCurrentMapAreaID",
    "SetMapToCurrentZone", "SetMapByID", "GetPlayerMapPosition",
    -- Inventar
-   "GetInventoryItemQuality", "GetInventoryItemLink", "GetContainerNumSlots",
+   "GetInventoryItemQuality", "GetInventoryItemLink", "GetContainerNumSlots", "GetContainerNumFreeSlots",
    "GetContainerItemLink", "GetContainerItemInfo", "GetItemInfo",
    -- Buffs und Reittier (AT_Consumables.lua)
    "UnitBuff", "IsMounted",

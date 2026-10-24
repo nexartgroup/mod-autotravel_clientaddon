@@ -424,6 +424,16 @@ function M.Install()
       local it = b and b[slot]
       return it and M.ItemLink(it.id) or nil
    end
+   -- 3.3.5a: freie Plaetze, Taschenart (0 = normale Tasche; Berufs- und Koechertaschen haben eine Bitmaske)
+   _G.GetContainerNumFreeSlots = function(bag)
+      local b = W.bags[bag]
+      if not b then return 0, 0 end
+      local free = 0
+      for slot = 1, b.size do
+         if not b[slot] then free = free + 1 end
+      end
+      return free, b.family or 0
+   end
    -- 3.3.5a: texture, itemCount, locked, quality, readable
    _G.GetContainerItemInfo = function(bag, slot)
       local b = W.bags[bag]

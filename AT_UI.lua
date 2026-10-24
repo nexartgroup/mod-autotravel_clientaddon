@@ -493,7 +493,9 @@ function UI.Update()
    panel.lTarget:SetText("|cffdde2ea" .. tostring(s.target or "-") .. "|r")
 
    if AT.active and s.legs and s.legs > 1 then
-      panel.lLeg:SetText(string.format("Etappe %d/%d", s.leg or 0, s.legs))
+      -- Bei einer Wegpunktkette zaehlt der Server die Wegpunkte, nicht die Etappen dazwischen.
+      local word = (AT.chainTotal and AT.chainTotal >= 2 and s.legs == AT.chainTotal) and "Wegpunkt" or "Etappe"
+      panel.lLeg:SetText(string.format("%s %d/%d", word, s.leg or 0, s.legs))
    else
       panel.lLeg:SetText("")
    end

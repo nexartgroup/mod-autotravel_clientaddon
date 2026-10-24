@@ -49,7 +49,7 @@ N.MIN_PROTOCOL = 3      -- aeltere Servermodule (3.x) sprechen dieselben Nachric
 N.state = "UNKNOWN"
 
 -- Faehigkeiten, die der Server meldet (siehe ATCapability im Servermodul).
-N.CAP = { HANDOVER = 1, ROUTE = 2, TAXI = 4, TELEPORT = 8, SETTINGS = 16, TRANSPORT = 32 }
+N.CAP = { HANDOVER = 1, ROUTE = 2, TAXI = 4, TELEPORT = 8, SETTINGS = 16, TRANSPORT = 32, WAYPOINTS = 64 }
 
 AT.server = {
    known    = false,   -- true, sobald ein Handschlag beantwortet wurde

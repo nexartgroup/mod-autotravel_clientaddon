@@ -396,6 +396,18 @@ local function Build()
       end))
    Advance(46)
 
+   -- Wegpunktketten. Verkettete Ziele (Strg + Umschalt + Linksklick auf die Carbonite-Karte) werden
+   -- immer einzeln angelaufen; der Haken dehnt das auf jeden Punkt der berechneten Route aus.
+   O.waypointCheck = Check(c, "Jeden Punkt der Carbonite-Route einzeln anlaufen",
+      "Aus: AutoTravel laeuft die Ziele, die du in Carbonite selbst verkettet hast (Strg + Umschalt + " ..
+      "Linksklick auf die Karte), der Reihe nach ab und plant nur den Weg dazwischen. Ein: auch jeder " ..
+      "Zwischenpunkt, den Carbonite selbst berechnet (Zonenuebergaenge, Torbogen), ist ein Pflichtpunkt. " ..
+      "Hilft, wenn deine verketteten Ziele nicht als Wegpunkte erkannt werden: '/at route' zeigt, welche " ..
+      "Punkte als Wegpunkt gelten, '/at route roh' die Rohdaten von Carbonite.",
+      16, y, "AllWaypoints")
+   table.insert(widgets, O.waypointCheck)
+   Advance(34)
+
    -- ---- Uebergabe -------------------------------------------------------
    Header(c, "Uebergabe an den Spieler", 16, y)
    Advance(28)
